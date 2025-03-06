@@ -1,4 +1,5 @@
 #include "first.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,7 @@ typedef struct {
 
 typedef struct {
     uint8_t interface_ip[4];
+    uint8_t interface_netmask[4];
     RouterTableEntry *router_table;
     uint32_t num_entries;
     uint32_t rand_delay;
@@ -41,7 +43,7 @@ int add_to_table(RouterState *router_state,
     return 0;
 }
 
-/* meant to be use to insert an entry for a network that is
+/* meant to be used to insert an entry for a network that is
  * subsumed by another and needs to be inserted before it
  *
  * one cannot add an entry at a position that isn't already taken
@@ -207,6 +209,81 @@ void print_router_table(RouterState *router_state) {
     }
 }
 
+void read_riptbl_and_add_to_state(int router_id, RouterState *router_state) {
+    char id_str[30];
+    snprintf(id_str, sizeof(id_str), "%d", router_id);
+    char filename[100] = "router_";
+    strncat(filename, id_str, sizeof(filename) - strlen(filename) - 1);
+    strncat(filename, ".riptbl", sizeof(filename) - strlen(filename) - 1);
+
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("riptbl file reading error");
+        free(router_state->router_table);
+        pthread_mutex_destroy(&router_state->change_router_table_mutex);
+        free(router_state);
+        exit(EXIT_FAILURE);
+    }
+
+    const uint32_t MAX_LINE = 100;
+    char line[MAX_LINE];
+    if (fgets(line, sizeof(line), file)) {
+        if (line[strlen(line) - 1] != '\n' && !feof(file)) {
+            errno = EIO;
+            perror("Invalid riptbl file");
+            free(router_state->router_table);
+            pthread_mutex_destroy(&router_state->change_router_table_mutex);
+            free(router_state);
+            exit(EXIT_FAILURE);
+        }
+
+        char first_line_ip[20];
+        char first_line_netmask[20];
+        sscanf(line, "%s %s", first_line_ip, first_line_netmask);
+        if (!is_valid_ip(first_line_ip) || !is_valid_ip(first_line_netmask)) {
+            errno = EIO;
+            perror("Invalid riptbl file");
+            free(router_state->router_table);
+            pthread_mutex_destroy(&router_state->change_router_table_mutex);
+            free(router_state);
+            exit(EXIT_FAILURE);
+        }
+
+        inet_pton(AF_INET, first_line_ip, router_state->interface_ip);
+        inet_pton(AF_INET, first_line_netmask, router_state->interface_netmask);
+    }
+    while (fgets(line, sizeof(line), file)) {
+        if (line[strlen(line) - 1] != '\n' && !feof(file)) {
+            errno = EIO;
+            perror("Invalid riptbl file");
+            free(router_state->router_table);
+            pthread_mutex_destroy(&router_state->change_router_table_mutex);
+            free(router_state);
+            exit(EXIT_FAILURE);
+        }
+
+        char dest_ip[20], netmask[20], next_hop[20];
+        int metric;
+        if (!(sscanf(line,
+                     " %19[^,], %19[^,], %19[^,], %d"
+                     , dest_ip, netmask, next_hop, &metric
+                    ) == 4) ||
+            !is_valid_ip(dest_ip) ||
+            !is_valid_ip(netmask) ||
+            !is_valid_ip(next_hop)
+        ) {
+            errno = EIO;
+            perror("Invalid riptbl file");
+            free(router_state->router_table);
+            pthread_mutex_destroy(&router_state->change_router_table_mutex);
+            free(router_state);
+            exit(EXIT_FAILURE);
+        }
+
+        add_to_table_strings(router_state, dest_ip, netmask, next_hop, metric);
+    }
+}
+
 RouterState* startup_router(int router_id) {
     RouterState *router_state = malloc(sizeof(RouterState));
     router_state->router_table = malloc(ROUTER_TABLE_MAX_SIZE * sizeof(RouterTableEntry));
@@ -218,22 +295,8 @@ RouterState* startup_router(int router_id) {
 
     pthread_mutex_init(&router_state->change_router_table_mutex, NULL);
 
-    int interface_rc = 0;
-    if (router_id == 1) {
-        interface_rc = inet_pton(AF_INET, "10.0.0.1", router_state->interface_ip);
+    read_riptbl_and_add_to_state(router_id, router_state);
 
-        add_to_table_strings(router_state, "3.4.5.6", "255.255.255.0", "10.0.0.11", 12);
-        add_to_table_strings(router_state, "192.168.1.128", "255.255.255.128", "10.0.0.9", 5);
-    } else if (router_id == 2) {
-        interface_rc = inet_pton(AF_INET, "10.0.0.2", router_state->interface_ip);
-
-        add_to_table_strings(router_state, "192.168.1.194", "255.255.255.192", "10.0.0.4", 7);
-        add_to_table_strings(router_state, "192.168.1.128", "255.255.255.128", "10.0.0.7", 3);
-    }
-
-    if (interface_rc != 1) {
-        exit(EXIT_FAILURE);
-    }
     printf("INITIAL_STATE:\n");
     print_router_table(router_state);
     printf("\n");
@@ -301,7 +364,14 @@ void* rip_broadcaster(void *arg_router_state) {
     memset(&broadcast_addr, 0, sizeof(broadcast_addr));
     broadcast_addr.sin_family = AF_INET;
     broadcast_addr.sin_port = htons(BROADCAST_PORT);
-    broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+
+    uint8_t broadcast_ip[4];
+    get_broadcast_ip(
+        router_state->interface_ip,
+        router_state->interface_netmask,
+        broadcast_ip
+    );
+    memcpy(&broadcast_addr.sin_addr.s_addr, broadcast_ip, 4);
 
 
     while (1) {
