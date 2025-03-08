@@ -589,13 +589,18 @@ void split_threads(RouterState *router_state) {
     }
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        exit(EXIT_FAILURE);
+    }
+
+    int curr_num_router = atoi(argv[1]);
+
     srand(time(NULL));
-    RouterState *router_one = startup_router(1);
-    RouterState *router_two = startup_router(2);
-
+    RouterState *router_one = startup_router(curr_num_router);
     split_threads(router_one);
-    split_threads(router_two);
 
+    // RouterState *router_two = startup_router(2);
+    // split_threads(router_two);
     pthread_exit(NULL);
 }
