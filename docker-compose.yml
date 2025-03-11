@@ -1,0 +1,32 @@
+services:
+  router1:
+    build: .
+    container_name: my-rip-router1
+    environment:
+      - ROUTER_ID=1
+    command: ["./peer-listen.out", "1"]
+    stdin_open: true
+    tty: true
+    networks:
+      custom-net-1:
+        ipv4_address: 192.168.100.10
+
+  router2:
+    build: .
+    container_name: my-rip-router2
+    environment:
+      - ROUTER_ID=2
+    command: ["./peer-listen.out", "2"]
+    stdin_open: true
+    tty: true
+    networks:
+      custom-net-1:
+        ipv4_address: 192.168.100.20
+
+networks:
+  custom-net-1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "192.168.100.0/24"
+

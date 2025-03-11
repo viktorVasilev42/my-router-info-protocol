@@ -9,22 +9,6 @@
 #include <pthread.h>
 #include <time.h>
 
-typedef struct {
-    uint8_t destination[4];
-    uint8_t netmask[4];
-    uint8_t gateway[4];
-    uint32_t metric;
-} RouterTableEntry;
-
-typedef struct {
-    uint8_t interface_ip[4];
-    uint8_t interface_netmask[4];
-    RouterTableEntry *router_table;
-    uint32_t num_entries;
-    uint32_t rand_delay;
-    pthread_mutex_t change_router_table_mutex;
-} RouterState;
-
 int add_to_table(RouterState *router_state,
         uint8_t *dest,
         uint8_t *netmask,
@@ -151,24 +135,6 @@ int remove_from_table_for_dest(RouterState *router_state, const char *dest) {
     return -1;
 }
 
-int is_network_subsumed(uint8_t *ip1, uint8_t *mask1, uint8_t *ip2, uint8_t *mask2) {
-    int mask1_bits = 0, mask2_bits = 0;
-    for (int i = 0; i < 4; i++) {
-        mask1_bits += __builtin_popcount(mask1[i]);
-        mask2_bits += __builtin_popcount(mask2[i]);
-    }
-
-    if (mask1_bits > mask2_bits) return 0;
-
-    for (int i = 0; i < 4; i++) {
-        if ((ip1[i] & mask1[i]) != (ip2[i] & mask1[i])) {
-            return 0;
-        }
-    }
-
-    return 1;
-}
-
 void print_router_table(RouterState *router_state) {
     char interface_str[16];
     snprintf(interface_str, sizeof(interface_str), "%u.%u.%u.%u",
@@ -176,8 +142,8 @@ void print_router_table(RouterState *router_state) {
             router_state->interface_ip[1],
             router_state->interface_ip[2],
             router_state->interface_ip[3]);
-    printf("Router Table for %s\n", interface_str);
-    printf("%-20s %-20s %-20s %-20s\n", "Dest", "Netmask", "Gateway", "Metric");
+    log_printf("Router Table for %s\n", interface_str);
+    log_printf("%-20s %-20s %-20s %-20s\n", "Dest", "Netmask", "Gateway", "Metric");
     for (uint32_t i = 0; i < router_state->num_entries; i++) {
         char dest_str[16];
         char netmask_str[16];
@@ -200,7 +166,7 @@ void print_router_table(RouterState *router_state) {
                 router_state->router_table[i].gateway[2],
                 router_state->router_table[i].gateway[3]
         );
-        printf("%-20s %-20s %-20s %-20u\n",
+        log_printf("%-20s %-20s %-20s %-20u\n",
                 dest_str,
                 netmask_str,
                 gateway_str,
@@ -284,22 +250,25 @@ void read_riptbl_and_add_to_state(int router_id, RouterState *router_state) {
     }
 }
 
-RouterState* startup_router(int router_id) {
+RouterState* startup_router(uint32_t router_id) {
     RouterState *router_state = malloc(sizeof(RouterState));
     router_state->router_table = malloc(ROUTER_TABLE_MAX_SIZE * sizeof(RouterTableEntry));
     router_state->num_entries = 0;
+    router_state->should_restart = 0;
+    router_state->router_id = router_id;
 
+    enable_logging = 1;
     uint32_t new_rand_delay = rand() % 8;
     router_state->rand_delay = new_rand_delay;
-    printf("new_rand_delay: %u\n", 3 + new_rand_delay);
+    log_printf("new_rand_delay: %u\n", 3 + new_rand_delay);
 
     pthread_mutex_init(&router_state->change_router_table_mutex, NULL);
 
     read_riptbl_and_add_to_state(router_id, router_state);
 
-    printf("INITIAL_STATE:\n");
+    log_printf("INITIAL_STATE:\n");
     print_router_table(router_state);
-    printf("\n");
+    log_printf("\n");
 
     return router_state;
 }
@@ -374,7 +343,7 @@ void* rip_broadcaster(void *arg_router_state) {
     memcpy(&broadcast_addr.sin_addr.s_addr, broadcast_ip, 4);
 
 
-    while (1) {
+    while (!router_state->should_restart) {
         pthread_mutex_lock(&router_state->change_router_table_mutex);
         const uint32_t SIZEOF_PACKET_TO_SEND =
             (router_state->num_entries * sizeof(RouterTableEntry)) + 8;
@@ -401,17 +370,12 @@ void* rip_broadcaster(void *arg_router_state) {
             exit(EXIT_FAILURE);
         }
 
-        printf("Broadcast message sent\n");
+        log_printf("Broadcast message sent\n");
         sleep(3 + router_state->rand_delay);
         free(packet_to_send);
     }
 
-    close(sock);
-    free(router_state->router_table);
-    pthread_mutex_destroy(&router_state->change_router_table_mutex);
-    free(router_state);
-    printf("rip_broadcaster ended\n");
-    exit(EXIT_FAILURE);
+    log_printf("rip_broadcaster ended\n");
     return NULL;
 }
 
@@ -427,6 +391,9 @@ void* rip_listen(void *arg_router_state) {
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket creation failed");
+        free(router_state->router_table);
+        pthread_mutex_destroy(&router_state->change_router_table_mutex);
+        free(router_state);
         exit(EXIT_FAILURE);
     }
 
@@ -462,8 +429,8 @@ void* rip_listen(void *arg_router_state) {
         exit(EXIT_FAILURE);
     }
 
-    while (1) {
-        printf("Router %u.%u.%u.%u listening for broadcasts on port %d...\n",
+    while (!router_state->should_restart) {
+        log_printf("Router %u.%u.%u.%u listening for broadcasts on port %d...\n",
                 router_state->interface_ip[0],
                 router_state->interface_ip[1],
                 router_state->interface_ip[2],
@@ -485,6 +452,10 @@ void* rip_listen(void *arg_router_state) {
             exit(EXIT_FAILURE);
         }
 
+        if (router_state->should_restart) {
+            return NULL;
+        }
+
         RouterState *rec_router_state = malloc(sizeof(RouterState));
         rec_router_state->router_table = malloc(ROUTER_TABLE_MAX_SIZE * sizeof(RouterTableEntry));
         memcpy(rec_router_state->interface_ip, rec_buffer, 4);
@@ -499,7 +470,7 @@ void* rip_listen(void *arg_router_state) {
                 rec_buffer + 8,
                 rec_router_state->num_entries * sizeof(RouterTableEntry));
 
-        printf("Router %u.%u.%u.%u received on listen\n",
+        log_printf("Router %u.%u.%u.%u received on listen\n",
                 router_state->interface_ip[0],
                 router_state->interface_ip[1],
                 router_state->interface_ip[2],
@@ -564,29 +535,135 @@ void* rip_listen(void *arg_router_state) {
         free(rec_router_state);
     }
 
-    close(sock);
-    free(router_state->router_table);
-    pthread_mutex_destroy(&router_state->change_router_table_mutex);
-    free(router_state);
-    printf("rip_listen ended\n");
-    exit(EXIT_FAILURE);
+    log_printf("rip_listen ended\n");
+    return NULL;
+}
+
+void send_tombstone_packet() {
+    int sock;
+    struct sockaddr_in tombstone_addr;
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    tombstone_addr.sin_family = AF_INET;
+    tombstone_addr.sin_port = htons(BROADCAST_PORT);
+    inet_pton(AF_INET, "127.0.0.1", &tombstone_addr.sin_addr.s_addr);
+
+    const uint32_t SIZEOF_PACKET_TO_SEND = 1;
+    const uint8_t data_to_send = 1;
+    ssize_t sendto_res =
+        sendto(sock, &data_to_send, SIZEOF_PACKET_TO_SEND, 0,
+               (struct sockaddr *)&tombstone_addr, sizeof(tombstone_addr));
+    if (sendto_res < 0) {
+        perror("sendto failed");
+        close(sock);
+        exit(EXIT_FAILURE);
+    }
+
+    log_printf("tombstone packet sent\n");
+}
+
+HandleCmdReturnCode handle_cmd(char *cmd, RouterState *router_state) {
+    if (strcmp(cmd, "log on") == 0) {
+        printf("Logging on.\n");
+        enable_logging = 1;
+        return CMD_DONT_RESTORE_SHOULD_LOG;
+    }
+    else if (strcmp(cmd, "log off") == 0) {
+        printf("Logging off.\n");
+        enable_logging = 0;
+        return CMD_DONT_RESTORE_SHOULD_LOG;
+    }
+    else if (strcmp(cmd, "reload") == 0) {
+        printf("Reloading router...\n");
+        router_state->should_restart = 1;
+        send_tombstone_packet();
+        return CMD_RESTART_ROUTER;
+    }
+
+    return CMD_DONE;
+}
+
+void* listen_for_stop_log(void *arg_router_state) {
+    RouterState *router_state = (RouterState*) arg_router_state;
+    log_printf("Press '+' to stop logging...\n");
+
+    HandleCmdReturnCode last_cmd_return_code = CMD_DONE;
+
+    while (last_cmd_return_code != CMD_RESTART_ROUTER) {
+        enable_raw_term();
+        char c = getchar();
+        if (c == '+') {
+            if (enable_logging) {
+                log_printf("Logging stopped.\n");
+                enable_logging = 0;
+            } else {
+                enable_logging = 1;
+                log_printf("Logging started.\n");
+            }
+        } 
+        else if (c == '/') {
+            int old_should_log = enable_logging;
+            enable_logging = 0;
+            log_printf("Logging stopped.\n");
+            printf("/");
+            disable_raw_term();
+
+            const size_t cmd_size = 100;
+            char cmd_buffer[cmd_size];
+            fgets(cmd_buffer, cmd_size, stdin);
+            cmd_buffer[strcspn(cmd_buffer, "\n")] = '\0';
+            last_cmd_return_code = handle_cmd(cmd_buffer, router_state);
+
+            if (last_cmd_return_code != CMD_DONT_RESTORE_SHOULD_LOG) {
+                enable_logging = old_should_log;
+            }
+        }
+    }
+
+    log_printf("listen_for_stop_log ended\n");
     return NULL;
 }
 
 void split_threads(RouterState *router_state) {
-    pthread_t threads[2];
+    pthread_t threads[3];
     int rc_one = pthread_create(&threads[0], NULL, rip_listen, (void*) router_state);
     if (rc_one) {
-        printf("Error");
+        errno = EAGAIN;
+        perror("Error initializing threads.");
         exit(EXIT_FAILURE);
     }
 
     sleep(1);
     int rc_two = pthread_create(&threads[1], NULL, rip_broadcaster, (void*) router_state);
     if (rc_two) {
-        printf("Error");
+        errno = EAGAIN;
+        perror("Error initializing threads.");
         exit(EXIT_FAILURE);
     }
+
+    sleep(1);
+    int rc_three = pthread_create(&threads[2], NULL, listen_for_stop_log, (void*) router_state);
+    if (rc_three) {
+        errno = EAGAIN;
+        perror("Error initializing threads.");
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_join(threads[0], NULL);
+    pthread_join(threads[1], NULL);
+    pthread_join(threads[2], NULL);
+
+    uint32_t the_router_id = router_state->router_id;
+    free(router_state->router_table);
+    pthread_mutex_destroy(&router_state->change_router_table_mutex);
+    free(router_state);
+    RouterState *reloaded_router = startup_router(the_router_id);
+    split_threads(reloaded_router);
 }
 
 int main(int argc, char *argv[]) {
@@ -594,13 +671,13 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    int curr_num_router = atoi(argv[1]);
+    setbuf(stdout, NULL);
+    uint32_t curr_num_router = atoi(argv[1]);
 
     srand(time(NULL));
     RouterState *router_one = startup_router(curr_num_router);
     split_threads(router_one);
 
-    // RouterState *router_two = startup_router(2);
-    // split_threads(router_two);
+    log_printf("main thread ended\n");
     pthread_exit(NULL);
 }
