@@ -116,10 +116,11 @@ int remove_from_table_for_dest(RouterState *router_state, const char *dest) {
 
     for (uint32_t i = 0; i < router_state->num_entries; i++) {
         if (match_ips(router_state->router_table[i].destination, proper_dest)) {
-            if (router_state->num_entries == 1) {
-                // i is 0 here definitely
+            if (i == router_state->num_entries - 1) {
                 memset(&router_state->router_table[i], 0, sizeof(RouterTableEntry));
             } else {
+                printf("i: %u\n", i);
+                printf("num_entries - 1: %u\n", router_state->num_entries - 1);
                 memcpy(&router_state->router_table[i],
                        &router_state->router_table[router_state->num_entries - 1],
                        sizeof(RouterTableEntry)
@@ -133,6 +134,20 @@ int remove_from_table_for_dest(RouterState *router_state, const char *dest) {
     }
 
     return -1;
+}
+
+int set_metric_for_all_entries_with_gateway(RouterState *router_state, uint8_t *arg_gateway, int new_metric) {
+    if (router_state->num_entries == 0) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < router_state->num_entries; i++) {
+        if (match_ips(router_state->router_table[i].gateway, arg_gateway)) {
+            router_state->router_table[i].metric = new_metric;
+        }
+    }
+
+    return 0;
 }
 
 void print_router_table(RouterState *router_state) {
@@ -270,6 +285,10 @@ RouterState* startup_router(uint32_t router_id) {
     print_router_table(router_state);
     log_printf("\n");
 
+    LifeTable *life_table = malloc(ROUTER_TABLE_MAX_SIZE * sizeof(LifeTable));
+    // this needs to be freed in all appropraite places
+    // the whole logic should be implemented
+
     return router_state;
 }
 
@@ -369,12 +388,15 @@ void* rip_broadcaster(void *arg_router_state) {
             free(router_state);
             exit(EXIT_FAILURE);
         }
+        free(packet_to_send);
 
         log_printf("Broadcast message sent\n");
+        log_printf("MY STATE:\n");
+        print_router_table(router_state);
         sleep(3 + router_state->rand_delay);
-        free(packet_to_send);
     }
 
+    close(sock);
     log_printf("rip_broadcaster ended\n");
     return NULL;
 }
@@ -453,6 +475,7 @@ void* rip_listen(void *arg_router_state) {
         }
 
         if (router_state->should_restart) {
+            close(sock);
             return NULL;
         }
 
@@ -475,7 +498,7 @@ void* rip_listen(void *arg_router_state) {
                 router_state->interface_ip[1],
                 router_state->interface_ip[2],
                 router_state->interface_ip[3]);
-        print_router_table(rec_router_state);
+        // print_router_table(rec_router_state);
 
         pthread_mutex_lock(&router_state->change_router_table_mutex);
         for (uint32_t i = 0; i < rec_router_state->num_entries; i++) {
@@ -535,17 +558,21 @@ void* rip_listen(void *arg_router_state) {
         free(rec_router_state);
     }
 
+    close(sock);
     log_printf("rip_listen ended\n");
     return NULL;
 }
 
-void send_tombstone_packet() {
+void send_tombstone_packet(RouterState *router_state) {
     int sock;
     struct sockaddr_in tombstone_addr;
 
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket creation failed");
+        free(router_state->router_table);
+        pthread_mutex_destroy(&router_state->change_router_table_mutex);
+        free(router_state);
         exit(EXIT_FAILURE);
     }
 
@@ -560,11 +587,15 @@ void send_tombstone_packet() {
                (struct sockaddr *)&tombstone_addr, sizeof(tombstone_addr));
     if (sendto_res < 0) {
         perror("sendto failed");
+        free(router_state->router_table);
+        pthread_mutex_destroy(&router_state->change_router_table_mutex);
+        free(router_state);
         close(sock);
         exit(EXIT_FAILURE);
     }
 
-    log_printf("tombstone packet sent\n");
+    close(sock);
+    log_printf("Tombstone packet sent\n");
 }
 
 HandleCmdReturnCode handle_cmd(char *cmd, RouterState *router_state) {
@@ -581,7 +612,7 @@ HandleCmdReturnCode handle_cmd(char *cmd, RouterState *router_state) {
     else if (strcmp(cmd, "reload") == 0) {
         printf("Reloading router...\n");
         router_state->should_restart = 1;
-        send_tombstone_packet();
+        send_tombstone_packet(router_state);
         return CMD_RESTART_ROUTER;
     }
 

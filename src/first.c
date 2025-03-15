@@ -6,8 +6,10 @@
 #include <termios.h>
 
 const uint32_t BROADCAST_PORT = 12345;
+const uint32_t LIVENESS_PORT = 12346;
 const uint32_t BUFFER_SIZE = 1024;
 const uint32_t ROUTER_TABLE_MAX_SIZE = 100;
+const uint32_t INFINITY_METRIC = 16;
 
 int enable_logging = 1;
 

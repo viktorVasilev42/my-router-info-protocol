@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+// routing table
 typedef struct {
     uint8_t destination[4];
     uint8_t netmask[4];
@@ -23,6 +24,14 @@ typedef struct {
     int should_restart;
 } RouterState;
 
+// life table
+typedef struct {
+    uint8_t gateway[4];
+    uint32_t life_left;
+} LifeTable;
+
+
+// command return status
 typedef enum {
     CMD_DONT_RESTORE_SHOULD_LOG,
     CMD_RESTART_ROUTER,
@@ -30,8 +39,10 @@ typedef enum {
 } HandleCmdReturnCode;
 
 extern const uint32_t BROADCAST_PORT;
+extern const uint32_t LIVENESS_PORT;
 extern const uint32_t BUFFER_SIZE;
 extern const uint32_t ROUTER_TABLE_MAX_SIZE;
+extern const uint32_t INFINITY_METRIC;
 
 extern int enable_logging;
 
