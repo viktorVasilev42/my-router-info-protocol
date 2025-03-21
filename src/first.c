@@ -10,6 +10,7 @@ const uint32_t LIVENESS_PORT = 12346;
 const uint32_t BUFFER_SIZE = 1024;
 const uint32_t ROUTER_TABLE_MAX_SIZE = 100;
 const uint32_t INFINITY_METRIC = 16;
+const uint32_t MAX_GATEWAY_LIFE = 5;
 
 int enable_logging = 1;
 
@@ -73,4 +74,12 @@ void disable_raw_term() {
     tcgetattr(STDIN_FILENO, &term);
     term.c_lflag |= (ICANON | ECHO);
     tcsetattr(STDIN_FILENO, TCSANOW, &term);
+}
+
+uint32_t cap_metric(uint32_t metric_to_cap) {
+    if (metric_to_cap > INFINITY_METRIC) {
+        return INFINITY_METRIC;
+    }
+
+    return metric_to_cap;
 }
