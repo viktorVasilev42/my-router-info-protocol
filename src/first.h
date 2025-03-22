@@ -30,13 +30,15 @@ typedef struct {
     uint32_t rand_delay;
     pthread_mutex_t change_router_table_mutex;
     int should_restart;
+    int should_terminate;
 } RouterState;
 
 // command return status
 typedef enum {
+    CMD_DONE,
     CMD_DONT_RESTORE_SHOULD_LOG,
     CMD_RESTART_ROUTER,
-    CMD_DONE
+    CMD_TERMINATE
 } HandleCmdReturnCode;
 
 extern const uint32_t BROADCAST_PORT;
@@ -45,8 +47,10 @@ extern const uint32_t BUFFER_SIZE;
 extern const uint32_t ROUTER_TABLE_MAX_SIZE;
 extern const uint32_t INFINITY_METRIC;
 extern const uint32_t MAX_GATEWAY_LIFE;
+extern const uint32_t TIME_FOR_LIFE_DROP;
 
 extern int enable_logging;
+
 
 int match_ips(uint8_t *first_ip, uint8_t *second_ip);
 
