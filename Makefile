@@ -6,3 +6,6 @@ down:
 
 logs:
 	docker compose logs -f
+
+rmi:
+	docker images -q | xargs docker rmi

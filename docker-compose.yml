@@ -4,7 +4,7 @@ services:
     container_name: my-rip-router1
     environment:
       - ROUTER_ID=1
-    command: ["./peer-listen.out", "1"]
+    command: ["./peer-listen.out", "router", "1"]
     stdin_open: true
     tty: true
     networks:
@@ -16,12 +16,24 @@ services:
     container_name: my-rip-router2
     environment:
       - ROUTER_ID=2
-    command: ["./peer-listen.out", "2"]
+    command: ["./peer-listen.out", "router", "2"]
     stdin_open: true
     tty: true
     networks:
       custom-net-1:
         ipv4_address: 192.168.100.20
+
+  host1:
+    build: .
+    container_name: rip-host1
+    environment:
+      - HOST_ID=1
+    command: ["./peer-listen.out", "host", "1"]
+    stdin_open: true
+    tty: true
+    networks:
+      custom-net-1:
+        ipv4_address: 192.168.100.11
 
 networks:
   custom-net-1:

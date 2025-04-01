@@ -1,7 +1,7 @@
 #ifndef FIRST_H
 #define FIRST_H
 
-#include <stdint.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <stdatomic.h>
 
@@ -48,6 +48,7 @@ extern const uint32_t ROUTER_TABLE_MAX_SIZE;
 extern const uint32_t INFINITY_METRIC;
 extern const uint32_t MAX_GATEWAY_LIFE;
 extern const uint32_t TIME_FOR_LIFE_DROP;
+extern const uint32_t RAND_DELAY_BONUS;
 
 extern int enable_logging;
 
