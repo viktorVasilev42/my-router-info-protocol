@@ -4,7 +4,7 @@ services:
     container_name: my-rip-router1
     environment:
       - ROUTER_ID=1
-    command: ["./peer-listen.out", "router", "1"]
+    command: ["./peer-listen", "router", "1"]
     stdin_open: true
     tty: true
     networks:
@@ -16,7 +16,7 @@ services:
     container_name: my-rip-router2
     environment:
       - ROUTER_ID=2
-    command: ["./peer-listen.out", "router", "2"]
+    command: ["./peer-listen", "router", "2"]
     stdin_open: true
     tty: true
     networks:
@@ -28,7 +28,7 @@ services:
     container_name: rip-host1
     environment:
       - HOST_ID=1
-    command: ["./peer-listen.out", "host", "1"]
+    command: ["./peer-listen", "host", "1"]
     stdin_open: true
     tty: true
     networks:

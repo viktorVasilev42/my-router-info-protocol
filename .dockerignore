@@ -1,0 +1,6 @@
+build/
+Dockerfile
+docker-compose.yml
+Makefile
+.git
+.gitignore

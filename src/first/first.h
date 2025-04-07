@@ -1,7 +1,7 @@
 #ifndef FIRST_H
 #define FIRST_H
 
-#include <unistd.h>
+#include <stdint.h>
 #include <pthread.h>
 #include <stdatomic.h>
 
