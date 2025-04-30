@@ -20,8 +20,8 @@ services:
     stdin_open: true
     tty: true
     networks:
-      custom-net-1:
-        ipv4_address: 192.168.100.20
+      custom-net-2:
+        ipv4_address: 192.168.200.10
 
   host1:
     build: .
@@ -35,10 +35,56 @@ services:
       custom-net-1:
         ipv4_address: 192.168.100.11
 
+  host2:
+    build: .
+    container_name: rip-host2
+    environment:
+      - HOST_ID=2
+    command: ["./peer-listen", "host", "2"]
+    stdin_open: true
+    tty: true
+    networks:
+      custom-net-2:
+        ipv4_address: 192.168.200.11
+
+  host3:
+    build: .
+    container_name: rip-host3
+    environment:
+      - HOST_ID=3
+    command: ["./peer-listen", "host", "3"]
+    stdin_open: true
+    tty: true
+    networks:
+      custom-net-2:
+        ipv4_address: 192.168.200.12
+
+  topology-grapher:
+    build: .
+    container_name: topology-grapher1
+    environment:
+      - DISPLAY=${DISPLAY}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    network_mode: "host"
+    command: ["./topology-grapher"]
+    stdin_open: true
+    tty: true
+    depends_on:
+      - router1
+      - router2
+      - host1
+
 networks:
   custom-net-1:
     driver: bridge
     ipam:
       config:
         - subnet: "192.168.100.0/24"
+
+  custom-net-2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "192.168.200.0/24"
 

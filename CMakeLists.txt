@@ -37,18 +37,26 @@ target_link_libraries(host PUBLIC
 )
 
 
-# Executable
+# Executables
 add_executable(peer-listen src/peer-listen/peer-listen.c)
+add_executable(topology-grapher src/topology-grapher/topology-grapher.c)
 
-# Target
-target_include_directories(peer-listen PRIVATE
-    ${GTK3_INCLUDE_DIRS}
-)
-target_compile_options(peer-listen PRIVATE
-    ${GTK3_CFLAGS_OTHER}
-)
+
+# Target peer-listen
 target_link_libraries(peer-listen PRIVATE
-    ${GTK3_LIBRARIES} 
     first
     host
+)
+
+#Target topology-grapher
+target_include_directories(topology-grapher PRIVATE
+    ${GTK3_INCLUDE_DIRS}
+)
+target_compile_options(topology-grapher PRIVATE
+    ${GTK_CFLAGS_OTHER}
+)
+target_link_libraries(topology-grapher PRIVATE
+    ${GTK3_LIBRARIES}
+    first
+    m
 )

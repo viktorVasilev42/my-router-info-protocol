@@ -152,8 +152,6 @@ int remove_from_table_for_dest(RouterState *router_state, const char *dest) {
             if (i == router_state->num_entries - 1) {
                 memset(&router_state->router_table[i], 0, sizeof(RouterTableEntry));
             } else {
-                printf("i: %u\n", i);
-                printf("num_entries - 1: %u\n", router_state->num_entries - 1);
                 memcpy(&router_state->router_table[i],
                        &router_state->router_table[router_state->num_entries - 1],
                        sizeof(RouterTableEntry)
