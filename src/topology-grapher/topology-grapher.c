@@ -51,7 +51,12 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_fill(cr);
 
         char label[20];
-        snprintf(label, sizeof(label), "R%u", v->interface_ip[3]);
+        snprintf(label, sizeof(label), "%u.%u.%u.%u",
+            v->interface_ip[0],
+            v->interface_ip[1],
+            v->interface_ip[2],
+            v->interface_ip[3]
+        );
         cairo_set_source_rgb(cr, 0, 0, 0);
         cairo_move_to(cr, v->pos.x + RADIUS + 2, v->pos.y - RADIUS - 2);
         cairo_show_text(cr, label);
