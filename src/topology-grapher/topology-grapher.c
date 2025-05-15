@@ -376,7 +376,8 @@ void *grapher_listen(void *arg_grapher_state) {
 
         RouterState *rec_router_state = malloc(sizeof(RouterState));
         rec_router_state->router_table = malloc(ROUTER_TABLE_MAX_SIZE * sizeof(RouterTableEntry));
-        memcpy(rec_router_state->interface_ip, rec_buffer, 4);
+        rec_router_state->interfaces = malloc(MAX_NUM_INTERFACES * sizeof(InterfaceTableEntry));
+        memcpy(rec_router_state->interfaces[0].interface_ip, rec_buffer, 4);
         memcpy(&rec_router_state->num_entries, rec_buffer + 4, 4);
         memcpy(
             rec_router_state->router_table,
@@ -387,9 +388,9 @@ void *grapher_listen(void *arg_grapher_state) {
         // add vertex for received router if not in graph
         if (!graph_contains_interface_ip(
             grapher_state,
-            rec_router_state->interface_ip
+            rec_router_state->interfaces[0].interface_ip
         )) {
-            add_vertex_to_graph(grapher_state, rec_router_state->interface_ip);
+            add_vertex_to_graph(grapher_state, rec_router_state->interfaces[0].interface_ip);
         }
 
         // the received router table is from a host (it has only one entry -> itself)
@@ -399,9 +400,10 @@ void *grapher_listen(void *arg_grapher_state) {
         }
 
         int curr_router_index_in_graph =
-            get_index_of_vertex_in_graph(grapher_state, rec_router_state->interface_ip);
+            get_index_of_vertex_in_graph(grapher_state, rec_router_state->interfaces[0].interface_ip);
         if (curr_router_index_in_graph < 0) {
             free(rec_router_state->router_table);
+            free(rec_router_state->interfaces);
             free(rec_router_state);
             free(grapher_state->vertices);
             free(grapher_state->edges);
@@ -413,7 +415,7 @@ void *grapher_listen(void *arg_grapher_state) {
 
         // get neighbors of current router vertex
         NeighborsState *neighbors_state =
-            get_neighbors_of_vertex(grapher_state, rec_router_state->interface_ip);
+            get_neighbors_of_vertex(grapher_state, rec_router_state->interfaces[0].interface_ip);
 
         pthread_mutex_lock(&grapher_state->change_graph_mutex);
         for (uint32_t i = 0; i < rec_router_state->num_entries; i++) {
@@ -448,7 +450,7 @@ void *grapher_listen(void *arg_grapher_state) {
                 // this vertex is no longer a neighbor of the router vertex.
                 remove_edge_between_interfaces(
                     grapher_state,
-                    rec_router_state->interface_ip,
+                    rec_router_state->interfaces[0].interface_ip,
                     neighbors_state->neighbors[i].vert.interface_ip
                 );
             }
@@ -461,6 +463,7 @@ void *grapher_listen(void *arg_grapher_state) {
 
         // free received router state
         free(rec_router_state->router_table);
+        free(rec_router_state->interfaces);
         free(rec_router_state);
     }
 

@@ -13,6 +13,7 @@ const uint32_t INFINITY_METRIC = 16;
 const uint32_t MAX_GATEWAY_LIFE = 5;
 const uint32_t TIME_FOR_LIFE_DROP = 3;
 const uint32_t RAND_DELAY_BONUS = 3;
+const uint32_t MAX_NUM_INTERFACES = 10;
 
 int enable_logging = 1;
 
@@ -47,6 +48,33 @@ int is_network_subsumed(uint8_t *ip1, uint8_t *mask1, uint8_t *ip2, uint8_t *mas
     }
 
     return 1;
+}
+
+int find_index_of_network_that_exacts(RouterState *router_state, uint8_t *ip_to_find, uint8_t *mask_to_find) {
+    for (int i = 0; i < router_state->num_entries; i++) {
+        if (match_ips(router_state->router_table[i].destination, ip_to_find) &&
+                match_ips(router_state->router_table[i].netmask, mask_to_find)
+        ) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int find_index_of_network_that_subsumes(RouterState *router_state, uint8_t *ip_to_find, uint8_t *mask_to_find) {
+    for (int i = 0; i < router_state->num_entries; i++) {
+        if (is_network_subsumed(
+                    router_state->router_table[i].destination,
+                    router_state->router_table[i].netmask,
+                    ip_to_find,
+                    mask_to_find)
+        ) {
+            return i;
+        }
+    }
+
+    return -1;
 }
 
 void get_broadcast_ip(uint8_t *host_ip, uint8_t *netmask, uint8_t *broadcast_ip) {
