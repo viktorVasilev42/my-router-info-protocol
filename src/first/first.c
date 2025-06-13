@@ -11,7 +11,7 @@ const uint32_t BUFFER_SIZE = 2048;
 const uint32_t ROUTER_TABLE_MAX_SIZE = 100;
 const uint32_t INFINITY_METRIC = 16;
 const uint32_t MAX_GATEWAY_LIFE = 5;
-const uint32_t TIME_FOR_LIFE_DROP = 3;
+const uint32_t TIME_FOR_LIFE_DROP = 5;
 const uint32_t RAND_DELAY_BONUS = 3;
 const uint32_t MAX_NUM_INTERFACES = 10;
 

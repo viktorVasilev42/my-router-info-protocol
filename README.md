@@ -5,3 +5,5 @@
 
 ### CLI Screenshot 2
 ![CLI Screenshot 2](./screenshotz/my-router-info-protocol-2.png)
+
+xhost +local:docker

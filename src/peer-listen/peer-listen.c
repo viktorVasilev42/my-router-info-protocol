@@ -286,10 +286,10 @@ int read_riptbl_and_add_to_state(int router_id, RouterState *router_state) {
             return -1;
         }
 
-        char first_line_ip[20];
-        char first_line_netmask[20];
-        sscanf(line, "%s %s", first_line_ip, first_line_netmask);
-        if (!is_valid_ip(first_line_ip) || !is_valid_ip(first_line_netmask)) {
+        char line_ip[20];
+        char line_netmask[20];
+        sscanf(line, "%s %s", line_ip, line_netmask);
+        if (!is_valid_ip(line_ip) || !is_valid_ip(line_netmask)) {
             errno = EIO;
             perror("Invalid riptbl file");
             fclose(file);
@@ -298,12 +298,12 @@ int read_riptbl_and_add_to_state(int router_id, RouterState *router_state) {
 
         inet_pton(
             AF_INET,
-            first_line_ip,
+            line_ip,
             router_state->interfaces[router_state->num_interfaces].interface_ip
         );
         inet_pton(
             AF_INET,
-            first_line_netmask,
+            line_netmask,
             router_state->interfaces[router_state->num_interfaces].interface_netmask
         );
         router_state->num_interfaces += 1;
@@ -358,8 +358,15 @@ RouterState* startup_router(uint32_t router_id) {
     return router_state;
 }
 
-// TODO document the protocol of what a router sends for each broadcast
-// maybe do the same for host_broadcaster
+// packet structure:
+// 1. 4 bytes -> ip of the interface that is broadcasting
+// 2. 4 bytes -> router_id - additional identifier needed for topology grapher
+// 3. 4 bytes -> num_entries (uint32_t)
+// 4. [router_state->num_entires] times RouterTableEntry for every row
+//      in the router table
+// 5. RouterTableEntry for the interface of the router as a destination
+//      in the router table
+//
 void* rip_broadcaster(void *arg_router_state) {
     RouterState *router_state = (RouterState*) arg_router_state;
 
@@ -400,13 +407,17 @@ void* rip_broadcaster(void *arg_router_state) {
 
     while (!router_state->should_restart && !router_state->should_terminate) {
         pthread_mutex_lock(&router_state->change_router_table_mutex);
-        const uint32_t SIZEOF_PACKET_TO_SEND =
-            ((router_state->num_entries + 1) * sizeof(RouterTableEntry)) + 8;
 
-        // plus 8 bytes because we send the interface_ip and num_entries
+        const uint32_t num_entries_plus_me = router_state->num_entries + 1;
+
+        // check docs for structure of packet being sent
+        const uint32_t SIZEOF_PACKET_TO_SEND =
+            (num_entries_plus_me * sizeof(RouterTableEntry)) + 12;
         uint8_t *packet_to_send = malloc(SIZEOF_PACKET_TO_SEND);
-        memcpy(packet_to_send + 4, &router_state->num_entries, 4);
-        memcpy(packet_to_send + 8, router_state->router_table,
+
+        memcpy(packet_to_send + 4, &router_state->router_id, 4);
+        memcpy(packet_to_send + 8, &num_entries_plus_me, 4);
+        memcpy(packet_to_send + 12, router_state->router_table,
                router_state->num_entries * sizeof(RouterTableEntry));
 
         pthread_mutex_unlock(&router_state->change_router_table_mutex);
@@ -464,10 +475,11 @@ void* rip_broadcaster(void *arg_router_state) {
 }
 
 
-void* rip_listen(void *arg_router_state) {
-    RipListenState *rip_listen_state = (RipListenState *) arg_router_state;
+void* rip_listen(void *arg_rip_listen_state) {
+    RipListenState *rip_listen_state = (RipListenState *) arg_rip_listen_state;
     RouterState *router_state = rip_listen_state->router_state;
     uint32_t curr_interface = rip_listen_state->curr_interface;
+
 
     int sock;
     struct sockaddr_in listen_addr, sender_addr;
@@ -503,12 +515,19 @@ void* rip_listen(void *arg_router_state) {
         exit(EXIT_FAILURE);
     }
 
+    uint8_t broadcast_ip[4];
+    get_broadcast_ip(
+        router_state->interfaces[curr_interface].interface_ip,
+        router_state->interfaces[curr_interface].interface_netmask,
+        broadcast_ip
+    );
+
     memset(&listen_addr, 0, sizeof(listen_addr));
     listen_addr.sin_family = AF_INET;
     listen_addr.sin_port = htons(BROADCAST_PORT);
     memcpy(
         &listen_addr.sin_addr.s_addr,
-        router_state->interfaces[curr_interface].interface_ip,
+        broadcast_ip,
         4
     );
 
@@ -530,10 +549,10 @@ void* rip_listen(void *arg_router_state) {
 
     while (!router_state->should_restart && !router_state->should_terminate) {
         log_printf("Router %u.%u.%u.%u listening for broadcasts on port %d...\n",
-                router_state->interfaces[0].interface_ip[0],
-                router_state->interfaces[0].interface_ip[1],
-                router_state->interfaces[0].interface_ip[2],
-                router_state->interfaces[0].interface_ip[3],
+                router_state->interfaces[curr_interface].interface_ip[0],
+                router_state->interfaces[curr_interface].interface_ip[1],
+                router_state->interfaces[curr_interface].interface_ip[2],
+                router_state->interfaces[curr_interface].interface_ip[3],
                 BROADCAST_PORT);
 
         int bytes_received = recvfrom(sock,
@@ -554,6 +573,12 @@ void* rip_listen(void *arg_router_state) {
             exit(EXIT_FAILURE);
         }
 
+        // tombstone packet from other packet received
+        if (bytes_received == 1 && rec_buffer[0] == 1) {
+            continue;
+        }
+
+        // tombstone packet form myself was received
         if (router_state->should_restart || router_state->should_terminate) {
             close(sock);
             log_printf("rip_listen ended\n");
@@ -575,16 +600,18 @@ void* rip_listen(void *arg_router_state) {
             free(rec_router_state);
             continue;
         }
-        memcpy(&rec_router_state->num_entries, rec_buffer + 4, 4);
+        memcpy(&rec_router_state->router_id, rec_buffer + 4, 4);
+        memcpy(&rec_router_state->num_entries, rec_buffer + 8, 4);
         memcpy(rec_router_state->router_table,
-                rec_buffer + 8,
+                rec_buffer + 12,
                 rec_router_state->num_entries * sizeof(RouterTableEntry));
 
         log_printf("Router %u.%u.%u.%u received on listen\n",
-                router_state->interfaces[0].interface_ip[0],
-                router_state->interfaces[0].interface_ip[1],
-                router_state->interfaces[0].interface_ip[2],
-                router_state->interfaces[0].interface_ip[3]);
+            router_state->interfaces[curr_interface].interface_ip[0],
+            router_state->interfaces[curr_interface].interface_ip[1],
+            router_state->interfaces[curr_interface].interface_ip[2],
+            router_state->interfaces[curr_interface].interface_ip[3]
+        );
 
         pthread_mutex_lock(&router_state->change_router_table_mutex);
         for (uint32_t i = 0; i < rec_router_state->num_entries; i++) {
@@ -615,10 +642,11 @@ void* rip_listen(void *arg_router_state) {
                         rec_router_state->interfaces[0].interface_ip) &&
                     rec_router_state->router_table[i].metric != 0
                 ) {
+                    // TODO check this
                     // the gateway for this entry is the router i currently receive from,
                     // so i trust the received metric and update even if it is worse
                     router_state->router_table[index_of_exact_dest].metric =
-                        cap_metric(rec_metric);
+                        cap_metric(rec_metric + 1);
                     memcpy(
                         router_state->router_table[index_of_exact_dest].interface,
                         router_state->interfaces[curr_interface].interface_ip,
@@ -694,8 +722,7 @@ void* rip_listen(void *arg_router_state) {
     return NULL;
 }
 
-// TODO i stopped refactoring here
-void send_tombstone_packet(RouterState *router_state) {
+void send_tombstone_packets(RouterState *router_state) {
     int sock;
     struct sockaddr_in tombstone_addr;
 
@@ -710,28 +737,53 @@ void send_tombstone_packet(RouterState *router_state) {
         exit(EXIT_FAILURE);
     }
 
-    tombstone_addr.sin_family = AF_INET;
-    tombstone_addr.sin_port = htons(BROADCAST_PORT);
-    inet_pton(AF_INET, "127.0.0.1", &tombstone_addr.sin_addr.s_addr);
-
-    const uint32_t SIZEOF_PACKET_TO_SEND = 1;
-    const uint8_t data_to_send = 1;
-    ssize_t sendto_res =
-        sendto(sock, &data_to_send, SIZEOF_PACKET_TO_SEND, 0,
-               (struct sockaddr *)&tombstone_addr, sizeof(tombstone_addr));
-    if (sendto_res < 0) {
-        perror("sendto failed");
+    int broadcast_enable = 1;
+    int setsockopt_res = setsockopt(
+        sock,
+        SOL_SOCKET, SO_BROADCAST,
+        &broadcast_enable, sizeof(broadcast_enable)
+    );
+    if (setsockopt_res < 0) {
+        perror("setsockopt failed");
+        close(sock);
         free(router_state->router_table);
         free(router_state->life_table);
         free(router_state->interfaces);
         pthread_mutex_destroy(&router_state->change_router_table_mutex);
         free(router_state);
-        close(sock);
         exit(EXIT_FAILURE);
     }
 
+    tombstone_addr.sin_family = AF_INET;
+    tombstone_addr.sin_port = htons(BROADCAST_PORT);
+    for (uint32_t i = 0; i < router_state->num_entries; i++) {
+        uint8_t broadcast_ip[4];
+        get_broadcast_ip(
+            router_state->interfaces[i].interface_ip,
+            router_state->interfaces[i].interface_netmask,
+            broadcast_ip
+        );
+        memcpy(&tombstone_addr.sin_addr.s_addr, broadcast_ip, 4);
+
+        const uint32_t SIZEOF_PACKET_TO_SEND = 1;
+        const uint8_t data_to_send = 1;
+        ssize_t sendto_res =
+            sendto(sock, &data_to_send, SIZEOF_PACKET_TO_SEND, 0,
+                   (struct sockaddr *)&tombstone_addr, sizeof(tombstone_addr));
+        if (sendto_res < 0) {
+            perror("sendto failed");
+            free(router_state->router_table);
+            free(router_state->life_table);
+            free(router_state->interfaces);
+            pthread_mutex_destroy(&router_state->change_router_table_mutex);
+            free(router_state);
+            close(sock);
+            exit(EXIT_FAILURE);
+        }
+    }
+
     close(sock);
-    log_printf("Tombstone packet sent\n");
+    log_printf("Tombstone packets sent\n");
 }
 
 HandleCmdReturnCode handle_cmd(char *cmd, RouterState *router_state) {
@@ -748,13 +800,13 @@ HandleCmdReturnCode handle_cmd(char *cmd, RouterState *router_state) {
     else if (strcmp(cmd, "reload") == 0) {
         printf("Reloading router...\n");
         router_state->should_restart = 1;
-        send_tombstone_packet(router_state);
+        send_tombstone_packets(router_state);
         return CMD_RESTART_ROUTER;
     }
     else if (strcmp(cmd, "exit") == 0) {
         printf("Terminating router...\n");
         router_state->should_terminate = 1;
-        send_tombstone_packet(router_state);
+        send_tombstone_packets(router_state);
         return CMD_TERMINATE;
     }
 
@@ -807,7 +859,8 @@ void* gateway_life_clock(void *arg_router_state) {
 
     while (!router_state->should_restart && !router_state->should_terminate) {
       sleep(TIME_FOR_LIFE_DROP);
-      // TODO CHANGE LIFE TABLE MUTEX
+      // TODO CHANGE LIFE TABLE MUTEX - can be omitted for now since this is
+      // the only place where the life_table is being read/written to
       for (uint32_t i = 0; i < router_state->life_entries; i++) {
           if (router_state->life_table[i].life_left == 0) {
               pthread_mutex_lock(&router_state->change_router_table_mutex);

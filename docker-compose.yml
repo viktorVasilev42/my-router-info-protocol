@@ -10,6 +10,8 @@ services:
     networks:
       custom-net-1:
         ipv4_address: 192.168.100.10
+      custom-net-3:
+        ipv4_address: 192.168.150.10
 
   router2:
     build: .
@@ -22,6 +24,9 @@ services:
     networks:
       custom-net-2:
         ipv4_address: 192.168.200.10
+      custom-net-3:
+        ipv4_address: 192.168.150.20
+
 
   host1:
     build: .
@@ -87,4 +92,11 @@ networks:
     ipam:
       config:
         - subnet: "192.168.200.0/24"
+
+  custom-net-3:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "192.168.150.0/24"
+      
 

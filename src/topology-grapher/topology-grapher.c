@@ -1,5 +1,5 @@
-#include "topology-grapher.h"
 #include <first.h>
+#include "topology-grapher.h"
 #include <gtk/gtk.h>
 #include <math.h>
 #include <stdlib.h>
@@ -34,6 +34,7 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
     GrapherState *grapher_state = (GrapherState*) data;
     cairo_set_line_width(cr, 1);
 
+    pthread_mutex_lock(&grapher_state->change_graph_mutex);
     for (int i = 0; i < grapher_state->num_edges; i++) {
         cairo_move_to(cr, grapher_state->edges[i].v->pos.x, grapher_state->edges[i].v->pos.y);
         cairo_line_to(cr, grapher_state->edges[i].u->pos.x, grapher_state->edges[i].u->pos.y);
@@ -52,15 +53,16 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
 
         char label[20];
         snprintf(label, sizeof(label), "%u.%u.%u.%u",
-            v->interface_ip[0],
-            v->interface_ip[1],
-            v->interface_ip[2],
-            v->interface_ip[3]
+            v->interfaces[0].interface_ip[0],
+            v->interfaces[0].interface_ip[1],
+            v->interfaces[0].interface_ip[2],
+            v->interfaces[0].interface_ip[3]
         );
         cairo_set_source_rgb(cr, 0, 0, 0);
         cairo_move_to(cr, v->pos.x + RADIUS + 2, v->pos.y - RADIUS - 2);
         cairo_show_text(cr, label);
     }
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
 
     return FALSE;
 }
@@ -118,8 +120,10 @@ gboolean simulate(gpointer data) {
             double dy = grapher_state->vertices[i].disp.y;
             double dist = sqrt(dx * dx + dy * dy);
             double disp = fmin(dist, grapher_state->t);
-            grapher_state->vertices[i].pos.x += (dx / dist) * disp;
-            grapher_state->vertices[i].pos.y += (dy / dist) * disp;
+            if (dist > 1e-8) {
+                grapher_state->vertices[i].pos.x += (dx / dist) * disp;
+                grapher_state->vertices[i].pos.y += (dy / dist) * disp;
+            }
 
             if (grapher_state->vertices[i].pos.x < 0) grapher_state->vertices[i].pos.x = 0;
             if (grapher_state->vertices[i].pos.y < 0) grapher_state->vertices[i].pos.y = 0;
@@ -176,28 +180,35 @@ void handle_reset(GtkButton *btn, gpointer data) {
 
     grapher_state->t = 5.0;
     grapher_state->curr_iteration = 0;
+    // TODO check this
     g_timeout_add(16, simulate, grapher_state);
 }
 
 
 // topology change utils for grapher
 int add_vertex_to_graph(GrapherState *grapher_state, uint8_t *interface_ip) {
+    pthread_mutex_lock(&grapher_state->change_graph_mutex);
     if (grapher_state->num_vertices >= GRAPHER_MAX_VERTICES) {
         return -1;
     }
 
+    grapher_state->vertices[grapher_state->num_vertices].num_interfaces = 0;
+    grapher_state->vertices[grapher_state->num_vertices].interfaces = malloc(MAX_NUM_INTERFACES * sizeof(InterfaceTableEntry));
+
     memcpy(
-        grapher_state->vertices[grapher_state->num_vertices].interface_ip,
+        grapher_state->vertices[grapher_state->num_vertices].interfaces[0].interface_ip,
         interface_ip,
         4
     );
-    srand(time(NULL));
+    grapher_state->vertices[grapher_state->num_vertices].num_interfaces += 1;
+
     grapher_state->vertices[grapher_state->num_vertices].pos.x = rand() % WIDTH;
     grapher_state->vertices[grapher_state->num_vertices].pos.y = rand() % HEIGHT;
     grapher_state->vertices[grapher_state->num_vertices].disp.x = 0;
     grapher_state->vertices[grapher_state->num_vertices].disp.y = 0;
     grapher_state->vertices[grapher_state->num_vertices].dragging = FALSE;
     grapher_state->num_vertices += 1;
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
     return 0;
 }
 
@@ -209,8 +220,8 @@ int remove_edge_between_interfaces(GrapherState *grapher_state, uint8_t *ip_one,
     for (uint32_t i = 0; i < grapher_state->num_edges; i++) {
         Edge *curr_edge = &grapher_state->edges[i];
         if (
-            (match_ips(curr_edge->v->interface_ip, ip_one) && (match_ips(curr_edge->u->interface_ip, ip_two))) ||
-            (match_ips(curr_edge->v->interface_ip, ip_two) && (match_ips(curr_edge->u->interface_ip, ip_one)))
+            (match_ips(curr_edge->v->interfaces[0].interface_ip, ip_one) && (match_ips(curr_edge->u->interfaces[0].interface_ip, ip_two))) ||
+            (match_ips(curr_edge->v->interfaces[0].interface_ip, ip_two) && (match_ips(curr_edge->u->interfaces[0].interface_ip, ip_one)))
         ) {
             if (i == grapher_state->num_edges - 1) {
                 memset(&grapher_state->edges[i], 0, sizeof(Edge));
@@ -246,7 +257,7 @@ int add_edge_to_graph(GrapherState *grapher_state, int index_one, int index_two)
 
 int graph_contains_interface_ip(GrapherState *grapher_state, uint8_t *interface_ip) {
     for (uint32_t i = 0; i < grapher_state->num_vertices; i++) {
-        if (match_ips(grapher_state->vertices[i].interface_ip, interface_ip)) {
+        if (match_ips(grapher_state->vertices[i].interfaces[0].interface_ip, interface_ip)) {
             return 1;
         }
     }
@@ -260,7 +271,7 @@ NeighborsState *get_neighbors_of_vertex(GrapherState *grapher_state, uint8_t *in
     neighbors_state->num_neighbors = 0;
 
     for (uint32_t i = 0; i < grapher_state->num_edges; i++) {
-        if (match_ips(grapher_state->edges[i].v->interface_ip, interface_ip)) {
+        if (match_ips(grapher_state->edges[i].v->interfaces[0].interface_ip, interface_ip)) {
             memcpy(
                 &neighbors_state->neighbors[neighbors_state->num_neighbors].vert,
                 grapher_state->edges[i].u,
@@ -269,7 +280,7 @@ NeighborsState *get_neighbors_of_vertex(GrapherState *grapher_state, uint8_t *in
             neighbors_state->neighbors[neighbors_state->num_neighbors].checked = 0;
             neighbors_state->num_neighbors += 1;
         }
-        else if (match_ips(grapher_state->edges[i].u->interface_ip, interface_ip)) {
+        else if (match_ips(grapher_state->edges[i].u->interfaces[0].interface_ip, interface_ip)) {
             memcpy(
                 &neighbors_state->neighbors[neighbors_state->num_neighbors].vert,
                 grapher_state->edges[i].v,
@@ -285,7 +296,7 @@ NeighborsState *get_neighbors_of_vertex(GrapherState *grapher_state, uint8_t *in
 
 int get_index_of_vertex_in_graph(GrapherState *grapher_state, uint8_t *interface_ip) {
     for (uint32_t i = 0; i < grapher_state->num_vertices; i++) {
-        if (match_ips(grapher_state->vertices[i].interface_ip, interface_ip)) {
+        if (match_ips(grapher_state->vertices[i].interfaces[0].interface_ip, interface_ip)) {
             return i;
         }
     }
@@ -295,7 +306,7 @@ int get_index_of_vertex_in_graph(GrapherState *grapher_state, uint8_t *interface
 
 NeighborVert* find_vertex_in_neighbors_state(NeighborsState *neighbors_state, uint8_t *interface_ip) {
     for (uint32_t i = 0; i < neighbors_state->num_neighbors; i++) {
-        if (match_ips(neighbors_state->neighbors[i].vert.interface_ip, interface_ip)) {
+        if (match_ips(neighbors_state->neighbors[i].vert.interfaces[0].interface_ip, interface_ip)) {
             return &neighbors_state->neighbors[i];
         }
     }
@@ -374,14 +385,19 @@ void *grapher_listen(void *arg_grapher_state) {
             exit(EXIT_FAILURE);
         }
 
+        if (bytes_received == 1 && rec_buffer[0] == 1) {
+            continue;
+        }
+
         RouterState *rec_router_state = malloc(sizeof(RouterState));
         rec_router_state->router_table = malloc(ROUTER_TABLE_MAX_SIZE * sizeof(RouterTableEntry));
         rec_router_state->interfaces = malloc(MAX_NUM_INTERFACES * sizeof(InterfaceTableEntry));
         memcpy(rec_router_state->interfaces[0].interface_ip, rec_buffer, 4);
-        memcpy(&rec_router_state->num_entries, rec_buffer + 4, 4);
+        memcpy(&rec_router_state->router_id, rec_buffer + 4, 4);
+        memcpy(&rec_router_state->num_entries, rec_buffer + 8, 4);
         memcpy(
             rec_router_state->router_table,
-            rec_buffer + 8,
+            rec_buffer + 12,
             rec_router_state->num_entries * sizeof(RouterTableEntry)
         );
         
@@ -451,7 +467,7 @@ void *grapher_listen(void *arg_grapher_state) {
                 remove_edge_between_interfaces(
                     grapher_state,
                     rec_router_state->interfaces[0].interface_ip,
-                    neighbors_state->neighbors[i].vert.interface_ip
+                    neighbors_state->neighbors[i].vert.interfaces[0].interface_ip
                 );
             }
         }
@@ -474,8 +490,8 @@ void *grapher_listen(void *arg_grapher_state) {
 
 GrapherState *startup_grapher() {
     GrapherState *grapher_state = malloc(sizeof(GrapherState));
-    grapher_state->vertices = malloc(grapher_state->num_vertices * sizeof(Vertex));
-    grapher_state->edges = malloc(grapher_state->num_edges * sizeof(Edge));
+    grapher_state->vertices = malloc(GRAPHER_MAX_VERTICES * sizeof(Vertex));
+    grapher_state->edges = malloc(GRAPHER_MAX_EDGES * sizeof(Edge));
     pthread_mutex_init(&grapher_state->change_graph_mutex, NULL);
 
     grapher_state->num_vertices = 0;
@@ -489,7 +505,6 @@ GrapherState *startup_grapher() {
     // to delete
     uint8_t test_ip_one[4] = { 0, 0, 0, 0 };
     add_vertex_to_graph(grapher_state, test_ip_one);
-    grapher_state->num_vertices += 1;
     // end to delete
 
     return grapher_state;
@@ -514,6 +529,7 @@ int split_threads(GrapherState *grapher_state) {
 
 // ---- Main ----
 int main(int argc, char *argv[]) {
+    srand(time(NULL));
     gtk_init(&argc, &argv);
 
     GrapherState *grapher_state = startup_grapher();
