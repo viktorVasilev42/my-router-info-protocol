@@ -19,6 +19,7 @@ typedef struct {
 typedef struct {
     Vec2 pos, disp;
     gboolean dragging;
+    uint32_t router_id;
     InterfaceTableEntry *interfaces;
     uint32_t num_interfaces;
 } Vertex;

@@ -33,7 +33,7 @@ services:
     container_name: rip-host1
     environment:
       - HOST_ID=1
-    command: ["./peer-listen", "host", "1"]
+    command: ["./peer-listen", "host", "101"]
     stdin_open: true
     tty: true
     networks:
@@ -45,7 +45,7 @@ services:
     container_name: rip-host2
     environment:
       - HOST_ID=2
-    command: ["./peer-listen", "host", "2"]
+    command: ["./peer-listen", "host", "102"]
     stdin_open: true
     tty: true
     networks:
@@ -57,7 +57,7 @@ services:
     container_name: rip-host3
     environment:
       - HOST_ID=3
-    command: ["./peer-listen", "host", "3"]
+    command: ["./peer-listen", "host", "103"]
     stdin_open: true
     tty: true
     networks:

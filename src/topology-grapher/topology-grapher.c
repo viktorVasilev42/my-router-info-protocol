@@ -186,12 +186,12 @@ void handle_reset(GtkButton *btn, gpointer data) {
 
 
 // topology change utils for grapher
-int add_vertex_to_graph(GrapherState *grapher_state, uint8_t *interface_ip) {
-    pthread_mutex_lock(&grapher_state->change_graph_mutex);
+int add_vertex_to_graph(GrapherState *grapher_state, uint32_t router_id, uint8_t *interface_ip) {
     if (grapher_state->num_vertices >= GRAPHER_MAX_VERTICES) {
         return -1;
     }
 
+    grapher_state->vertices[grapher_state->num_vertices].router_id = router_id;
     grapher_state->vertices[grapher_state->num_vertices].num_interfaces = 0;
     grapher_state->vertices[grapher_state->num_vertices].interfaces = malloc(MAX_NUM_INTERFACES * sizeof(InterfaceTableEntry));
 
@@ -208,7 +208,44 @@ int add_vertex_to_graph(GrapherState *grapher_state, uint8_t *interface_ip) {
     grapher_state->vertices[grapher_state->num_vertices].disp.y = 0;
     grapher_state->vertices[grapher_state->num_vertices].dragging = FALSE;
     grapher_state->num_vertices += 1;
-    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
+    return 0;
+}
+
+int get_index_of_vertex_in_graph_with_id(GrapherState *grapher_state, uint32_t router_id) {
+    for (uint32_t i = 0; i < grapher_state->num_vertices; i++) {
+        if (grapher_state->vertices[i].router_id == router_id) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int add_interface_to_vertex_if_not_exists(GrapherState *grapher_state, uint32_t vertex_index, uint8_t *interface_ip) {
+    uint32_t vertex_num_interfaces = grapher_state->vertices[vertex_index].num_interfaces;
+    if (vertex_num_interfaces >= MAX_NUM_INTERFACES) {
+        // vertex contains maximum number of interfaces
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < vertex_num_interfaces; i++) {
+        if (match_ips(
+            grapher_state->vertices[vertex_index].interfaces[i].interface_ip,
+            interface_ip
+        )) {
+            // interface already exists in the found vertex
+            return 0;
+        }
+    }
+    
+    // add interface to vertex
+    memcpy(
+        grapher_state->vertices[vertex_index].interfaces[vertex_num_interfaces].interface_ip,
+        interface_ip,
+        4
+    );
+    grapher_state->vertices[vertex_index].num_interfaces += 1;
+
     return 0;
 }
 
@@ -251,16 +288,6 @@ int add_edge_to_graph(GrapherState *grapher_state, int index_one, int index_two)
     grapher_state->edges[grapher_state->num_edges].v = &grapher_state->vertices[index_one];
     grapher_state->edges[grapher_state->num_edges].u = &grapher_state->vertices[index_two];
     grapher_state->num_edges += 1;
-    return 0;
-}
-
-
-int graph_contains_interface_ip(GrapherState *grapher_state, uint8_t *interface_ip) {
-    for (uint32_t i = 0; i < grapher_state->num_vertices; i++) {
-        if (match_ips(grapher_state->vertices[i].interfaces[0].interface_ip, interface_ip)) {
-            return 1;
-        }
-    }
 
     return 0;
 }
@@ -294,10 +321,15 @@ NeighborsState *get_neighbors_of_vertex(GrapherState *grapher_state, uint8_t *in
     return neighbors_state;
 }
 
-int get_index_of_vertex_in_graph(GrapherState *grapher_state, uint8_t *interface_ip) {
+int get_index_of_vertex_in_graph_with_interface_ip(GrapherState *grapher_state, uint8_t *interface_ip) {
     for (uint32_t i = 0; i < grapher_state->num_vertices; i++) {
-        if (match_ips(grapher_state->vertices[i].interfaces[0].interface_ip, interface_ip)) {
-            return i;
+        for (uint32_t j = 0; j < grapher_state->vertices[i].num_interfaces; j++) {
+            if (match_ips(
+                grapher_state->vertices[i].interfaces[j].interface_ip,
+                interface_ip
+            )) {
+                return i;
+            }
         }
     }
 
@@ -401,39 +433,44 @@ void *grapher_listen(void *arg_grapher_state) {
             rec_router_state->num_entries * sizeof(RouterTableEntry)
         );
         
-        // add vertex for received router if not in graph
-        if (!graph_contains_interface_ip(
-            grapher_state,
-            rec_router_state->interfaces[0].interface_ip
-        )) {
-            add_vertex_to_graph(grapher_state, rec_router_state->interfaces[0].interface_ip);
+        pthread_mutex_lock(&grapher_state->change_graph_mutex);
+
+        int curr_router_index_in_graph = get_index_of_vertex_in_graph_with_id(grapher_state, rec_router_state->router_id);
+        if (curr_router_index_in_graph < 0) {
+            // if not in graph, add vertex for received router
+            int add_vertex_rc = add_vertex_to_graph(grapher_state, rec_router_state->router_id, rec_router_state->interfaces[0].interface_ip);
+            if (add_vertex_rc < 0) {
+                free(rec_router_state->router_table);
+                free(rec_router_state->interfaces);
+                free(rec_router_state);
+                free(grapher_state->vertices);
+                free(grapher_state->edges);
+                pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+                free(grapher_state);
+                exit(EXIT_FAILURE);
+            }
+
+            curr_router_index_in_graph = grapher_state->num_vertices - 1;
+        } else {
+            // else, add the received interface to the vertex if it is not already present
+            add_interface_to_vertex_if_not_exists(
+                grapher_state,
+                curr_router_index_in_graph,
+                rec_router_state->interfaces[0].interface_ip
+            );
         }
 
         // the received router table is from a host (it has only one entry -> itself)
         // we shouldn't update his neighbors in the graph
         if (rec_router_state->num_entries == 1) {
+            pthread_mutex_unlock(&grapher_state->change_graph_mutex);
             continue;
         }
-
-        int curr_router_index_in_graph =
-            get_index_of_vertex_in_graph(grapher_state, rec_router_state->interfaces[0].interface_ip);
-        if (curr_router_index_in_graph < 0) {
-            free(rec_router_state->router_table);
-            free(rec_router_state->interfaces);
-            free(rec_router_state);
-            free(grapher_state->vertices);
-            free(grapher_state->edges);
-            pthread_mutex_destroy(&grapher_state->change_graph_mutex);
-            free(grapher_state);
-            exit(EXIT_FAILURE);
-        }
-
 
         // get neighbors of current router vertex
         NeighborsState *neighbors_state =
             get_neighbors_of_vertex(grapher_state, rec_router_state->interfaces[0].interface_ip);
 
-        pthread_mutex_lock(&grapher_state->change_graph_mutex);
         for (uint32_t i = 0; i < rec_router_state->num_entries; i++) {
             if (rec_router_state->router_table[i].metric == 1) {
                 uint8_t *ip_to_find = rec_router_state->router_table[i].destination;
@@ -447,16 +484,15 @@ void *grapher_listen(void *arg_grapher_state) {
                     // if vertex exists in the graph but is not a neighbor then
                     // vertex needs to be added as a neighbor to the current router's vertex
                     int found_index_in_graph = 
-                        get_index_of_vertex_in_graph(grapher_state, ip_to_find);
-                    if (found_index_in_graph < 0) {
-                        continue;
-                    }
+                        get_index_of_vertex_in_graph_with_interface_ip(grapher_state, ip_to_find);
 
-                    add_edge_to_graph(
-                        grapher_state,
-                        curr_router_index_in_graph,
-                        found_index_in_graph
-                    );
+                    if (found_index_in_graph >= 0) {
+                        add_edge_to_graph(
+                            grapher_state,
+                            curr_router_index_in_graph,
+                            found_index_in_graph
+                        );
+                    }
                 }
             }
         }
@@ -502,10 +538,11 @@ GrapherState *startup_grapher() {
     grapher_state->drawing_area = gtk_drawing_area_new();
     grapher_state->dragged_vertex = NULL;
 
-    // to delete
+    // TODO delete this
     uint8_t test_ip_one[4] = { 0, 0, 0, 0 };
-    add_vertex_to_graph(grapher_state, test_ip_one);
-    // end to delete
+    pthread_mutex_lock(&grapher_state->change_graph_mutex);
+    add_vertex_to_graph(grapher_state, 0, test_ip_one);
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
 
     return grapher_state;
 }
