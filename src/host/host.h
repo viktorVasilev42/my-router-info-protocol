@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 typedef struct {
+    uint32_t host_id;
     uint8_t interface_ip[4];
     uint8_t interface_netmask[4];
     uint32_t rand_delay;

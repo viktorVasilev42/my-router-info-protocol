@@ -52,14 +52,15 @@ void* host_broadcaster(void *arg_host_state) {
 
     while (1) {
         // one table entry [ip, netmask, ip, 0]
-        // plus 8 bytes - interface_ip and interface_netmask of host
+        // plus 12 bytes - interface_ip, host_id and num_entries of host
         const uint32_t SIZEOF_PACKET_TO_SEND = 
-            sizeof(RouterTableEntry) + 8;
+            sizeof(RouterTableEntry) + 12;
         uint8_t *packet_to_send = malloc(SIZEOF_PACKET_TO_SEND);
 
         memcpy(packet_to_send, host_state->interface_ip, 4);
-        uint32_t SIZE_OF_ONE_ENTRY = 1;
-        memcpy(packet_to_send + 4, &SIZE_OF_ONE_ENTRY, 4);
+        memcpy(packet_to_send + 4, &host_state->host_id, 4);
+        uint32_t single_num_entries = 1;
+        memcpy(packet_to_send + 8, &single_num_entries, 4);
         RouterTableEntry table_entry_to_send = {
             .destination = {
                 host_state->interface_ip[0],
@@ -81,7 +82,7 @@ void* host_broadcaster(void *arg_host_state) {
             },
             .metric = 0
         };
-        memcpy(packet_to_send + 8, &table_entry_to_send, sizeof(RouterTableEntry));
+        memcpy(packet_to_send + 12, &table_entry_to_send, sizeof(RouterTableEntry));
 
         ssize_t sendto_res =
             sendto(sock, packet_to_send, SIZEOF_PACKET_TO_SEND, 0,
@@ -160,6 +161,7 @@ int read_hosttbl_and_add_to_state(int host_id, HostState *host_state) {
 HostState* startup_host(uint32_t host_id) {
     HostState *host_state = malloc(sizeof(HostState));
 
+    host_state->host_id = host_id;
     host_state->rand_delay = (rand() % 8) + HOST_RAND_DELAY_BONUS;
     log_printf("host_rand_delay: %u\n", host_state->rand_delay);
     int read_hosttbl_rc = read_hosttbl_and_add_to_state(host_id, host_state);

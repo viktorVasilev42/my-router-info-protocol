@@ -5,6 +5,11 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+typedef struct {
+    uint8_t interface_ip[4];
+    uint8_t interface_netmask[4];
+} InterfaceTableEntry;
+
 // life table
 typedef struct {
     uint8_t gateway[4];
@@ -16,15 +21,16 @@ typedef struct {
     uint8_t destination[4];
     uint8_t netmask[4];
     uint8_t gateway[4];
+    uint8_t interface[4];
     uint32_t metric;
 } RouterTableEntry;
 
 typedef struct {
     uint32_t router_id;
-    uint8_t interface_ip[4];
-    uint8_t interface_netmask[4];
+    InterfaceTableEntry *interfaces;
     RouterTableEntry *router_table;
     LifeTableEntry *life_table;
+    uint32_t num_interfaces;
     uint32_t num_entries;
     uint32_t life_entries;
     uint32_t rand_delay;
@@ -41,6 +47,12 @@ typedef enum {
     CMD_TERMINATE
 } HandleCmdReturnCode;
 
+// rip_listen param type
+typedef struct {
+    RouterState *router_state;
+    uint32_t curr_interface;
+} RipListenState;
+
 extern const uint32_t BROADCAST_PORT;
 extern const uint32_t LIVENESS_PORT;
 extern const uint32_t BUFFER_SIZE;
@@ -49,6 +61,7 @@ extern const uint32_t INFINITY_METRIC;
 extern const uint32_t MAX_GATEWAY_LIFE;
 extern const uint32_t TIME_FOR_LIFE_DROP;
 extern const uint32_t RAND_DELAY_BONUS;
+extern const uint32_t MAX_NUM_INTERFACES;
 
 extern int enable_logging;
 
@@ -59,6 +72,10 @@ int is_valid_ip(const char *ip);
 
 
 int is_network_subsumed(uint8_t *ip1, uint8_t *mask1, uint8_t *ip2, uint8_t *mask2);
+
+int find_index_of_network_that_exacts(RouterState *router_state, uint8_t *ip_to_find, uint8_t *mask_to_find);
+
+int find_index_of_network_that_subsumes(RouterState *router_state, uint8_t *ip_to_find, uint8_t *mask_to_find);
 
 void get_broadcast_ip(uint8_t *host_ip, uint8_t *netmask, uint8_t *broadcast_ip);
 

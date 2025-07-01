@@ -9,3 +9,6 @@ logs:
 
 rmi:
 	docker images -q | xargs docker rmi
+
+grapher:
+	docker compose up --build topology-grapher -d

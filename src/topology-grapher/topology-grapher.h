@@ -3,6 +3,7 @@
 
 #include <gtk/gtk.h>
 #include <pthread.h>
+#include <first.h>
 
 extern const uint32_t WIDTH;
 extern const uint32_t HEIGHT;
@@ -18,7 +19,9 @@ typedef struct {
 typedef struct {
     Vec2 pos, disp;
     gboolean dragging;
-    uint8_t interface_ip[4];
+    uint32_t router_id;
+    InterfaceTableEntry *interfaces;
+    uint32_t num_interfaces;
 } Vertex;
 
 typedef struct {

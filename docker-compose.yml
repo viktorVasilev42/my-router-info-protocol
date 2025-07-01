@@ -10,6 +10,8 @@ services:
     networks:
       custom-net-1:
         ipv4_address: 192.168.100.10
+      custom-net-3:
+        ipv4_address: 192.168.150.10
 
   router2:
     build: .
@@ -22,13 +24,16 @@ services:
     networks:
       custom-net-2:
         ipv4_address: 192.168.200.10
+      custom-net-3:
+        ipv4_address: 192.168.150.20
+
 
   host1:
     build: .
     container_name: rip-host1
     environment:
       - HOST_ID=1
-    command: ["./peer-listen", "host", "1"]
+    command: ["./peer-listen", "host", "101"]
     stdin_open: true
     tty: true
     networks:
@@ -40,7 +45,7 @@ services:
     container_name: rip-host2
     environment:
       - HOST_ID=2
-    command: ["./peer-listen", "host", "2"]
+    command: ["./peer-listen", "host", "102"]
     stdin_open: true
     tty: true
     networks:
@@ -52,7 +57,7 @@ services:
     container_name: rip-host3
     environment:
       - HOST_ID=3
-    command: ["./peer-listen", "host", "3"]
+    command: ["./peer-listen", "host", "103"]
     stdin_open: true
     tty: true
     networks:
@@ -87,4 +92,11 @@ networks:
     ipam:
       config:
         - subnet: "192.168.200.0/24"
+
+  custom-net-3:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "192.168.150.0/24"
+      
 
