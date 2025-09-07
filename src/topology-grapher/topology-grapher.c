@@ -10,11 +10,17 @@
 
 const uint32_t WIDTH = 600;
 const uint32_t HEIGHT = 600;
-const uint32_t RADIUS = 5;
+const uint32_t RADIUS = 15;
 const uint32_t ITERATIONS = 500;
 const uint32_t GRAPHER_MAX_VERTICES = 200;
 const uint32_t GRAPHER_MAX_EDGES = 300;
 
+
+void free_vertex_interfaces(GrapherState *grapher_state) {
+    for (uint32_t i = 0; i < grapher_state->num_vertices; i++) {
+        free(grapher_state->vertices[i].interfaces);
+    }
+}
 
 // ---- Physics Functions ----
 double fr(double x) {
@@ -33,6 +39,8 @@ double cool(double t) {
 gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
     GrapherState *grapher_state = (GrapherState*) data;
     cairo_set_line_width(cr, 1);
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 12);
 
     pthread_mutex_lock(&grapher_state->change_graph_mutex);
     for (int i = 0; i < grapher_state->num_edges; i++) {
@@ -41,11 +49,16 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
     }
     cairo_stroke(cr);
 
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 12);
+    uint32_t copy_num_vertices = grapher_state->num_vertices;
+    uint32_t size_vertexes = copy_num_vertices * sizeof(Vertex);
 
-    for (int i = 0; i < grapher_state->num_vertices; i++) {
-        Vertex *v = &grapher_state->vertices[i];
+    Vertex *copy_vertexes = malloc(size_vertexes);
+    memcpy(copy_vertexes, grapher_state->vertices, size_vertexes);
+
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
+
+    for (int i = 0; i < copy_num_vertices; i++) {
+        Vertex *v = &copy_vertexes[i];
 
         cairo_arc(cr, v->pos.x, v->pos.y, RADIUS, 0, 2 * M_PI);
         cairo_set_source_rgb(cr, 0.2, 0.4, 0.8);
@@ -62,7 +75,8 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_move_to(cr, v->pos.x + RADIUS + 2, v->pos.y - RADIUS - 2);
         cairo_show_text(cr, label);
     }
-    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
+
+    free(copy_vertexes);
 
     return FALSE;
 }
@@ -71,7 +85,10 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
 gboolean simulate(gpointer data) {
     GrapherState *grapher_state = (GrapherState *) data;
 
-    if (grapher_state->curr_iteration++ >= ITERATIONS) return FALSE;
+    if (grapher_state->curr_iteration++ >= ITERATIONS) {
+        gtk_widget_queue_draw(grapher_state->drawing_area);
+        return TRUE;
+    } 
 
     pthread_mutex_lock(&grapher_state->change_graph_mutex);
     for (int i = 0; i < grapher_state->num_vertices; i++) {
@@ -142,46 +159,58 @@ gboolean simulate(gpointer data) {
 gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer data) {
     GrapherState *grapher_state = (GrapherState *) data;
 
+    pthread_mutex_lock(&grapher_state->change_graph_mutex);
+
     for (int i = 0; i < grapher_state->num_vertices; i++) {
         double dx = event->x - grapher_state->vertices[i].pos.x;
         double dy = event->y - grapher_state->vertices[i].pos.y;
-        if (sqrt(dx * dx + dy * dy) < 10) {
+        if (sqrt(dx * dx + dy * dy) < 15) {
             grapher_state->vertices[i].dragging = TRUE;
             grapher_state->dragged_vertex = &grapher_state->vertices[i];
             break;
         }
     }
+
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
     return TRUE;
 }
 
 gboolean on_button_release(GtkWidget *widget, GdkEventButton *event, gpointer data) {
     GrapherState *grapher_state = (GrapherState *) data;
 
+    pthread_mutex_lock(&grapher_state->change_graph_mutex);
+    
     if (grapher_state->dragged_vertex) {
         grapher_state->dragged_vertex->dragging = FALSE;
         grapher_state->dragged_vertex = NULL;
     }
+
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
     return TRUE;
 }
 
 gboolean on_motion_notify(GtkWidget *widget, GdkEventMotion *event, gpointer data) {
     GrapherState *grapher_state = (GrapherState *) data;
 
+    pthread_mutex_lock(&grapher_state->change_graph_mutex);
+
     if (grapher_state->dragged_vertex) {
         grapher_state->dragged_vertex->pos.x = event->x;
         grapher_state->dragged_vertex->pos.y = event->y;
         gtk_widget_queue_draw(widget);
     }
+
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
     return TRUE;
 }
 
 void handle_reset(GtkButton *btn, gpointer data) {
     GrapherState *grapher_state = (GrapherState *) data;
 
+    pthread_mutex_lock(&grapher_state->change_graph_mutex);
     grapher_state->t = 5.0;
     grapher_state->curr_iteration = 0;
-    // TODO check this
-    g_timeout_add(16, simulate, grapher_state);
+    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
 }
 
 
@@ -359,6 +388,7 @@ void *grapher_listen(void *arg_grapher_state) {
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket creation failed");
+        free_vertex_interfaces(grapher_state);
         free(grapher_state->vertices);
         free(grapher_state->edges);
         pthread_mutex_destroy(&grapher_state->change_graph_mutex);
@@ -374,6 +404,7 @@ void *grapher_listen(void *arg_grapher_state) {
     if (setsock_res < 0) {
         perror("setsockopt with SO_REUSEADDR failed");
         close(sock);
+        free_vertex_interfaces(grapher_state);
         free(grapher_state->vertices);
         free(grapher_state->edges);
         pthread_mutex_destroy(&grapher_state->change_graph_mutex);
@@ -393,6 +424,7 @@ void *grapher_listen(void *arg_grapher_state) {
     if (bind_res < 0) {
         perror("bind failed");
         close(sock);
+        free_vertex_interfaces(grapher_state);
         free(grapher_state->vertices);
         free(grapher_state->edges);
         pthread_mutex_destroy(&grapher_state->change_graph_mutex);
@@ -410,6 +442,7 @@ void *grapher_listen(void *arg_grapher_state) {
         if (bytes_received < 0) {
             perror("recvform failed");
             close(sock);
+            free_vertex_interfaces(grapher_state);
             free(grapher_state->vertices);
             free(grapher_state->edges);
             pthread_mutex_destroy(&grapher_state->change_graph_mutex);
@@ -443,6 +476,7 @@ void *grapher_listen(void *arg_grapher_state) {
                 free(rec_router_state->router_table);
                 free(rec_router_state->interfaces);
                 free(rec_router_state);
+                free_vertex_interfaces(grapher_state);
                 free(grapher_state->vertices);
                 free(grapher_state->edges);
                 pthread_mutex_destroy(&grapher_state->change_graph_mutex);
@@ -478,7 +512,7 @@ void *grapher_listen(void *arg_grapher_state) {
                     find_vertex_in_neighbors_state(neighbors_state, ip_to_find);
 
                 if (found_vertex != NULL) {
-                    // neighbor already exists. make sure it stays in the graph
+                    // neighbor already exists. make sure that edge stays in the graph
                     found_vertex->checked = 1;
                 } else {
                     // if vertex exists in the graph but is not a neighbor then
@@ -553,6 +587,7 @@ int split_threads(GrapherState *grapher_state) {
 
     int rc_one = pthread_create(&threads[0], NULL, grapher_listen, (void*) grapher_state);
     if (rc_one) {
+        free_vertex_interfaces(grapher_state);
         free(grapher_state->vertices);
         free(grapher_state->edges);
         pthread_mutex_destroy(&grapher_state->change_graph_mutex);
@@ -604,6 +639,7 @@ int main(int argc, char *argv[]) {
 
     gtk_main();
 
+    free_vertex_interfaces(grapher_state);
     free(grapher_state->vertices);
     free(grapher_state->edges);
     pthread_mutex_destroy(&grapher_state->change_graph_mutex);

@@ -68,7 +68,7 @@ int add_to_table(RouterState *router_state,
  *
  * one cannot add an entry at a position that isn't already taken
  * */
-int add_to_table_at_pos(RouterState *router_state, uint32_t pos,
+int add_to_table_at_pos(RouterState *router_state, int pos,
         uint8_t *dest,
         uint8_t *netmask,
         uint8_t *gateway,
@@ -83,7 +83,7 @@ int add_to_table_at_pos(RouterState *router_state, uint32_t pos,
         return -1;
     }
 
-    for (uint32_t i = router_state->num_entries - 1; i >= pos; i--) {
+    for (int i = router_state->num_entries - 1; i >= pos; i--) {
         memcpy(&router_state->router_table[i + 1], &router_state->router_table[i], sizeof(RouterTableEntry));
     }
 
@@ -121,70 +121,61 @@ int add_to_table_strings(RouterState *router_state,
     return 0;
 }
 
-int add_to_table_at_pos_strings(RouterState *router_state, uint32_t pos,
-        const char *dest,
-        const char *netmask,
-        const char *gateway,
-        const char *if_to_hop,
-        uint32_t metric) {
-
-    uint8_t arg_dest[4];
-    uint8_t arg_netmask[4];
-    uint8_t arg_gateway[4];
-    uint8_t arg_if_to_hop[4];
-
-    int dest_rc = inet_pton(AF_INET, dest, arg_dest);
-    int mask_rc = inet_pton(AF_INET, netmask, arg_netmask);
-    int gateway_rc = inet_pton(AF_INET, gateway, arg_gateway);
-    int if_to_hop_rc = inet_pton(AF_INET, if_to_hop, arg_if_to_hop);
-
-    if (dest_rc != 1 || mask_rc != 1 || gateway_rc != 1 || if_to_hop_rc != 1) {
+int remove_current_interface_from_router_table_and_get_index(
+        InterfaceTableEntry *interface_to_delete,
+        RouterTableEntry *router_table,
+        uint32_t num_entries
+) {
+    if (num_entries == 0) {
         return -1;
     }
 
-    return add_to_table_at_pos(
-        router_state,
-        pos,
-        arg_dest,
-        arg_netmask,
-        arg_gateway,
-        arg_if_to_hop,
-        metric
-    );
+    for (uint32_t i = 0; i < num_entries; i++) {
+        if (match_ips(router_table[i].destination, interface_to_delete->interface_ip) && 
+                match_ips(router_table[i].netmask, interface_to_delete->interface_netmask)) {
+            if (i == num_entries - 1) {
+                memset(&router_table[i], 0, sizeof(RouterTableEntry));
+            } else {
+                memcpy(&router_table[i],
+                       &router_table[num_entries - 1],
+                       sizeof(RouterTableEntry)
+                );
+                memset(&router_table[num_entries - 1], 0, sizeof(RouterTableEntry));
+            }
+
+            return i;
+        }
+    }
+
+    return -1;
 }
 
-// TODO - DELETE - Currently not being used:
-//
-// int remove_from_table_for_dest(RouterState *router_state, const char *dest) {
-//     if (router_state->num_entries == 0) {
-//         return -1;
-//     }
-//
-//     uint8_t proper_dest[4];
-//     int dest_rc = inet_pton(AF_INET, dest, proper_dest);
-//     if (dest_rc != 1) {
-//         return -1;
-//     }
-//
-//     for (uint32_t i = 0; i < router_state->num_entries; i++) {
-//         if (match_ips(router_state->router_table[i].destination, proper_dest)) {
-//             if (i == router_state->num_entries - 1) {
-//                 memset(&router_state->router_table[i], 0, sizeof(RouterTableEntry));
-//             } else {
-//                 memcpy(&router_state->router_table[i],
-//                        &router_state->router_table[router_state->num_entries - 1],
-//                        sizeof(RouterTableEntry)
-//                 );
-//                 memset(&router_state->router_table[router_state->num_entries - 1], 0, sizeof(RouterTableEntry));
-//             }
-//
-//             router_state->num_entries -= 1;
-//             return 0;
-//         }
-//     }
-//
-//     return -1;
-// }
+int add_current_interface_to_router_table_at_pos(
+        InterfaceTableEntry *interface_to_add,
+        int pos,
+        RouterTableEntry *router_table,
+        uint32_t num_entries
+) {
+    if (pos >= num_entries) {
+        return -1;
+    }
+
+    if (num_entries >= ROUTER_TABLE_MAX_SIZE) {
+        return -1;
+    }
+
+    for (int i = num_entries - 1; i >= pos; i--) {
+        memcpy(&router_table[i + 1], &router_table[i], sizeof(RouterTableEntry));
+    }
+
+    memcpy(router_table[pos].destination, interface_to_add->interface_ip, 4);
+    memcpy(router_table[pos].netmask, interface_to_add->interface_netmask, 4);
+    memcpy(router_table[pos].gateway, interface_to_add->interface_ip, 4);
+    memcpy(router_table[pos].interface, interface_to_add->interface_ip, 4);
+    router_table[pos].metric = 1;
+
+    return 0;
+}
 
 int set_metric_for_all_entries_with_destination(RouterState *router_state, uint8_t *arg_destination, int new_metric) {
     if (router_state->num_entries == 0) {
@@ -219,7 +210,7 @@ void print_router_table(RouterState *router_state) {
         inet_ntop(AF_INET, router_state->router_table[i].destination, dest_str, sizeof(dest_str));
         inet_ntop(AF_INET, router_state->router_table[i].netmask, netmask_str, sizeof(netmask_str));
         inet_ntop(AF_INET, router_state->router_table[i].gateway, gateway_str, sizeof(gateway_str));
-        inet_ntop(AF_INET, router_state->router_table[i].interface, interface_str, sizeof(interface_str));
+        inet_ntop(AF_INET, router_state->router_table[i].interface, if_to_hop_str, sizeof(if_to_hop_str));
 
         log_printf("%-20s %-20s %-20s %-20s %-20u\n",
             dest_str,
@@ -308,6 +299,17 @@ int read_riptbl_and_add_to_state(int router_id, RouterState *router_state) {
         );
         router_state->num_interfaces += 1;
 
+        if (router_state->rip_type == RIP_STATIC) {
+            add_to_table_strings(
+                router_state,
+                line_ip,
+                line_netmask,
+                line_ip,
+                line_ip,
+                1
+            );
+        }
+
         file_line_count += 1;
     }
     pthread_mutex_unlock(&router_state->change_router_table_mutex);
@@ -316,7 +318,7 @@ int read_riptbl_and_add_to_state(int router_id, RouterState *router_state) {
     return 0;
 }
 
-RouterState* startup_router(uint32_t router_id) {
+RouterState* startup_router(uint32_t router_id, RipType rip_type) {
     RouterState *router_state = malloc(sizeof(RouterState));
     router_state->router_table = malloc(ROUTER_TABLE_MAX_SIZE * sizeof(RouterTableEntry));
 
@@ -333,6 +335,7 @@ RouterState* startup_router(uint32_t router_id) {
     router_state->should_restart = 0;
     router_state->should_terminate = 0;
     router_state->router_id = router_id;
+    router_state->rip_type = rip_type;
 
     enable_logging = 1;
     uint32_t new_rand_delay = (rand() % 8) + RAND_DELAY_BONUS;
@@ -408,17 +411,23 @@ void* rip_broadcaster(void *arg_router_state) {
     while (!router_state->should_restart && !router_state->should_terminate) {
         pthread_mutex_lock(&router_state->change_router_table_mutex);
 
-        const uint32_t num_entries_plus_me = router_state->num_entries + 1;
+        const uint32_t max_num_entries = router_state->num_entries + 1;
+        const uint32_t real_num_entries = (router_state->rip_type == RIP_STATIC)
+            ? router_state->num_entries - 1
+            : max_num_entries;
 
         // check docs for structure of packet being sent
         const uint32_t SIZEOF_PACKET_TO_SEND =
-            (num_entries_plus_me * sizeof(RouterTableEntry)) + 12;
+            (max_num_entries * sizeof(RouterTableEntry)) + 12;
         uint8_t *packet_to_send = malloc(SIZEOF_PACKET_TO_SEND);
+        const uint32_t offset_for_router_table_in_packet = 12;
 
         memcpy(packet_to_send + 4, &router_state->router_id, 4);
-        memcpy(packet_to_send + 8, &num_entries_plus_me, 4);
-        memcpy(packet_to_send + 12, router_state->router_table,
-               router_state->num_entries * sizeof(RouterTableEntry));
+        memcpy(packet_to_send + 8, &real_num_entries, 4);
+        memcpy(packet_to_send + offset_for_router_table_in_packet,
+               router_state->router_table,
+               router_state->num_entries * sizeof(RouterTableEntry)
+        );
 
         pthread_mutex_unlock(&router_state->change_router_table_mutex);
 
@@ -428,23 +437,45 @@ void* rip_broadcaster(void *arg_router_state) {
 
         // broadcast address based on every interface
         for (uint32_t i = 0; i < router_state->num_interfaces; i++) {
+            int rip_static_index_of_current_interface = -1;
+
+            if (router_state->rip_type == RIP_DYNAMIC) {
+                memcpy(myself_to_add.destination, router_state->interfaces[i].interface_ip, 4);
+                memcpy(myself_to_add.netmask, router_state->interfaces[i].interface_netmask, 4);
+                memcpy(myself_to_add.gateway, router_state->interfaces[i].interface_ip, 4);
+                memcpy(
+                    &packet_to_send[SIZEOF_PACKET_TO_SEND - sizeof(RouterTableEntry)],
+                    &myself_to_add,
+                    sizeof(RouterTableEntry)
+                );
+            } else {
+                rip_static_index_of_current_interface = remove_current_interface_from_router_table_and_get_index(
+                    &router_state->interfaces[i],
+                    (RouterTableEntry*) (packet_to_send + offset_for_router_table_in_packet),
+                    real_num_entries + 1
+                );
+
+                if (rip_static_index_of_current_interface < 0) {
+                    perror("failed deletion of current interface on rip_static broadcast");
+                    free(packet_to_send);
+                    close(sock);
+                    free(router_state->router_table);
+                    free(router_state->life_table);
+                    free(router_state->interfaces);
+                    pthread_mutex_destroy(&router_state->change_router_table_mutex);
+                    free(router_state);
+                    exit(EXIT_FAILURE);
+                }
+            }
+
             uint8_t broadcast_ip[4];
             get_broadcast_ip(
                 router_state->interfaces[i].interface_ip,
                 router_state->interfaces[i].interface_netmask,
                 broadcast_ip
             );
-            memcpy(myself_to_add.destination, router_state->interfaces[i].interface_ip, 4);
-            memcpy(myself_to_add.netmask, router_state->interfaces[i].interface_netmask, 4);
-            memcpy(myself_to_add.gateway, router_state->interfaces[i].interface_ip, 4);
-
             memcpy(&broadcast_addr.sin_addr.s_addr, broadcast_ip, 4);
             memcpy(packet_to_send, router_state->interfaces[i].interface_ip, 4);
-            memcpy(
-                &packet_to_send[SIZEOF_PACKET_TO_SEND - sizeof(RouterTableEntry)],
-                &myself_to_add,
-                sizeof(RouterTableEntry)
-            );
 
             ssize_t sendto_res = sendto(sock, packet_to_send, SIZEOF_PACKET_TO_SEND, 0,
                 (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
@@ -460,10 +491,20 @@ void* rip_broadcaster(void *arg_router_state) {
                 free(router_state);
                 exit(EXIT_FAILURE);
             }
+
+            if (rip_static_index_of_current_interface != -1) {
+                add_current_interface_to_router_table_at_pos(
+                    &router_state->interfaces[i],
+                    rip_static_index_of_current_interface,
+                    (RouterTableEntry*) (packet_to_send + offset_for_router_table_in_packet),
+                    real_num_entries
+                );
+            }
+
         }
         free(packet_to_send);
 
-        log_printf("Broadcast message sent\n");
+        log_printf("Broadcast messages sent\n");
         print_router_table(router_state);
         log_printf("\n");
         sleep(router_state->rand_delay);
@@ -799,13 +840,21 @@ HandleCmdReturnCode handle_cmd(char *cmd, RouterState *router_state) {
     }
     else if (strcmp(cmd, "reload") == 0) {
         printf("Reloading router...\n");
+
+        pthread_mutex_lock(&router_state->change_router_table_mutex);
         router_state->should_restart = 1;
+        pthread_mutex_unlock(&router_state->change_router_table_mutex);
+
         send_tombstone_packets(router_state);
         return CMD_RESTART_ROUTER;
     }
     else if (strcmp(cmd, "exit") == 0) {
         printf("Terminating router...\n");
+
+        pthread_mutex_lock(&router_state->change_router_table_mutex);
         router_state->should_terminate = 1;
+        pthread_mutex_unlock(&router_state->change_router_table_mutex);
+
         send_tombstone_packets(router_state);
         return CMD_TERMINATE;
     }
@@ -934,6 +983,7 @@ int split_threads(RouterState *router_state) {
     }
 
     int was_should_terminate = router_state->should_terminate;
+    RipType was_router_rip_type = router_state->rip_type;
 
 cleanup_router_state:
     free(rip_listen_states);
@@ -951,13 +1001,13 @@ cleanup_router_state:
         return 0;
     } else {
         // recursive call - the router should restart
-        RouterState *reloaded_router = startup_router(the_router_id);
+        RouterState *reloaded_router = startup_router(the_router_id, was_router_rip_type);
         return split_threads(reloaded_router);
     }
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
+    if (argc < 3 || argc > 4) {
         errno = EINVAL;
         perror("Invalid arguments");
         exit(EXIT_FAILURE);
@@ -968,7 +1018,15 @@ int main(int argc, char *argv[]) {
 
     if (strcmp(argv[1], "router") == 0) {
         uint32_t curr_num_router = atoi(argv[2]);
-        RouterState *router_one = startup_router(curr_num_router);
+
+        RipType curr_rip_type;
+        if (argc == 3 || strcmp(argv[3], "static") != 0) {
+            curr_rip_type = RIP_DYNAMIC;
+        } else {
+            curr_rip_type = RIP_STATIC;
+        }
+
+        RouterState *router_one = startup_router(curr_num_router, curr_rip_type);
         int split_rc = split_threads(router_one);
         if (split_rc < 0) {
             exit(EXIT_FAILURE);

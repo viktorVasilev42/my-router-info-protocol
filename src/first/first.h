@@ -25,8 +25,14 @@ typedef struct {
     uint32_t metric;
 } RouterTableEntry;
 
+typedef enum {
+    RIP_DYNAMIC = 0,
+    RIP_STATIC = 1
+} RipType;
+
 typedef struct {
     uint32_t router_id;
+    RipType rip_type;
     InterfaceTableEntry *interfaces;
     RouterTableEntry *router_table;
     LifeTableEntry *life_table;
