@@ -24,8 +24,14 @@ typedef struct {
     uint32_t num_interfaces;
 } Vertex;
 
+typedef enum {
+    EDGE_TYPE_DIRECT,
+    EDGE_TYPE_TABLE
+} EdgeType;
+
 typedef struct {
     Vertex *v, *u;
+    EdgeType type;
 } Edge;
 
 
@@ -38,6 +44,11 @@ typedef struct {
     NeighborVert *neighbors;
     uint32_t num_neighbors;
 } NeighborsState;
+
+typedef struct {
+    Vertex *vertices;
+    uint32_t num_vertices;
+} SubnetVertices;
 
 
 typedef struct {

@@ -83,6 +83,8 @@ int find_index_of_network_that_exacts(RouterState *router_state, uint8_t *ip_to_
 
 int find_index_of_network_that_subsumes(RouterState *router_state, uint8_t *ip_to_find, uint8_t *mask_to_find);
 
+int is_same_subnet(uint8_t *ip1, uint8_t *mask1, uint8_t *ip2, uint8_t *mask2);
+
 void get_broadcast_ip(uint8_t *host_ip, uint8_t *netmask, uint8_t *broadcast_ip);
 
 void log_printf(const char *format, ...);

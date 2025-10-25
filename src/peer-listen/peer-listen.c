@@ -43,6 +43,21 @@ int reset_gateway_in_life_table(RouterState *router_state, uint8_t *arg_gateway)
     return 0;
 }
 
+int update_gateway_in_life_table(RouterState *router_state, uint8_t *prev_gateway, uint8_t *new_gateway) {
+    for (uint32_t i = 0; i < router_state->life_entries; i++) {
+        if (match_ips(router_state->life_table[i].gateway, prev_gateway)) {
+            memcpy(
+                router_state->life_table[i].gateway,
+                new_gateway,
+                4
+            );
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
 int add_to_table(RouterState *router_state,
         uint8_t *dest,
         uint8_t *netmask,
@@ -299,16 +314,14 @@ int read_riptbl_and_add_to_state(int router_id, RouterState *router_state) {
         );
         router_state->num_interfaces += 1;
 
-        if (router_state->rip_type == RIP_STATIC) {
-            add_to_table_strings(
-                router_state,
-                line_ip,
-                line_netmask,
-                line_ip,
-                line_ip,
-                1
-            );
-        }
+        add_to_table_strings(
+            router_state,
+            line_ip,
+            line_netmask,
+            line_ip,
+            line_ip,
+            1
+        );
 
         file_line_count += 1;
     }
@@ -411,14 +424,13 @@ void* rip_broadcaster(void *arg_router_state) {
     while (!router_state->should_restart && !router_state->should_terminate) {
         pthread_mutex_lock(&router_state->change_router_table_mutex);
 
-        const uint32_t max_num_entries = router_state->num_entries + 1;
         const uint32_t real_num_entries = (router_state->rip_type == RIP_STATIC)
             ? router_state->num_entries - 1
-            : max_num_entries;
+            : router_state->num_entries;
 
         // check docs for structure of packet being sent
         const uint32_t SIZEOF_PACKET_TO_SEND =
-            (max_num_entries * sizeof(RouterTableEntry)) + 12;
+            (real_num_entries * sizeof(RouterTableEntry)) + 12;
         uint8_t *packet_to_send = malloc(SIZEOF_PACKET_TO_SEND);
         const uint32_t offset_for_router_table_in_packet = 12;
 
@@ -431,24 +443,11 @@ void* rip_broadcaster(void *arg_router_state) {
 
         pthread_mutex_unlock(&router_state->change_router_table_mutex);
 
-        RouterTableEntry myself_to_add;
-        inet_pton(AF_INET, "127.0.0.1", &myself_to_add.interface);
-        myself_to_add.metric = 0;
-
         // broadcast address based on every interface
         for (uint32_t i = 0; i < router_state->num_interfaces; i++) {
             int rip_static_index_of_current_interface = -1;
 
-            if (router_state->rip_type == RIP_DYNAMIC) {
-                memcpy(myself_to_add.destination, router_state->interfaces[i].interface_ip, 4);
-                memcpy(myself_to_add.netmask, router_state->interfaces[i].interface_netmask, 4);
-                memcpy(myself_to_add.gateway, router_state->interfaces[i].interface_ip, 4);
-                memcpy(
-                    &packet_to_send[SIZEOF_PACKET_TO_SEND - sizeof(RouterTableEntry)],
-                    &myself_to_add,
-                    sizeof(RouterTableEntry)
-                );
-            } else {
+            if (router_state->rip_type == RIP_STATIC) {
                 rip_static_index_of_current_interface = remove_current_interface_from_router_table_and_get_index(
                     &router_state->interfaces[i],
                     (RouterTableEntry*) (packet_to_send + offset_for_router_table_in_packet),
@@ -656,11 +655,13 @@ void* rip_listen(void *arg_rip_listen_state) {
 
         pthread_mutex_lock(&router_state->change_router_table_mutex);
         for (uint32_t i = 0; i < rec_router_state->num_entries; i++) {
+
+            // split horizon check
             if (match_ips(
                         rec_router_state->router_table[i].gateway,
                         router_state->interfaces[curr_interface].interface_ip
             )) {
-                // split horizon
+                // continue on split horizon
                 continue;
             }
 
@@ -680,19 +681,23 @@ void* rip_listen(void *arg_rip_listen_state) {
                     router_table[i].metric;
                 if (match_ips(
                         router_state->router_table[index_of_exact_dest].gateway,
-                        rec_router_state->interfaces[0].interface_ip) &&
-                    rec_router_state->router_table[i].metric != 0
+                        rec_router_state->interfaces[0].interface_ip)
                 ) {
                     // TODO check this
                     // the gateway for this entry is the router i currently receive from,
-                    // so i trust the received metric and update even if it is worse
-                    router_state->router_table[index_of_exact_dest].metric =
-                        cap_metric(rec_metric + 1);
-                    memcpy(
-                        router_state->router_table[index_of_exact_dest].interface,
-                        router_state->interfaces[curr_interface].interface_ip,
-                        4
-                    );
+                    // so i trust the received metric and update even if it is worse.
+                    //
+                    // only update if metric actually changes.
+                    // but still do life table update anyways.
+                    if (rec_metric != old_metric) {
+                      router_state->router_table[index_of_exact_dest].metric =
+                          cap_metric(rec_metric + 1);
+                      memcpy(
+                          router_state->router_table[index_of_exact_dest].interface,
+                          router_state->interfaces[curr_interface].interface_ip,
+                          4
+                      );
+                    }
 
                 } else if (rec_metric + 1 < old_metric) {
                     // the gateway for this entry is being changed, so i have to check if
@@ -709,6 +714,7 @@ void* rip_listen(void *arg_rip_listen_state) {
                         4
                     );
                 } else {
+                    // dont do life table update
                     should_do_life_table_update = 0;
                 }
             } else {
@@ -720,15 +726,59 @@ void* rip_listen(void *arg_rip_listen_state) {
 
                 if (index_of_parent_network != -1) {
                     // a network in my router table subsumes the currently received network.
-                    // add the new network before the parent network in the router table
-                    add_to_table_at_pos(
+
+                    if (is_same_subnet(
+                        rec_router_state->router_table[i].destination,
+                        rec_router_state->router_table[i].netmask,
+                        router_state->router_table[index_of_parent_network].destination,
+                        router_state->router_table[index_of_parent_network].netmask
+                    )) {
+                        uint32_t old_metric = router_state->
+                            router_table[index_of_parent_network].metric;
+                        uint32_t rec_metric = rec_router_state->
+                            router_table[i].metric;
+
+                        // if the network in my router is the exact same subnet as the received network:
+                        // update (replace) the destination, gateway, interface and metric but only if
+                        // the new metric is better.
+                        if (rec_metric + 1 < old_metric) {
+                            // memcpy-ing of subnet is not neccessary here.
+                            // it is already the same.
+                            update_gateway_in_life_table(
+                                router_state,
+                                router_state->router_table[index_of_parent_network].destination,
+                                rec_router_state->router_table[i].destination
+                            );
+
+                            memcpy(
+                                router_state->router_table[index_of_parent_network].destination,
+                                rec_router_state->router_table[i].destination,
+                                4
+                            );
+                            memcpy(router_state->router_table[index_of_exact_dest].gateway,
+                                    rec_router_state->interfaces[0].interface_ip,
+                                    4
+                            );
+                            memcpy(
+                                router_state->router_table[index_of_parent_network].interface,
+                                router_state->interfaces[curr_interface].interface_ip,
+                                4
+                            );
+                            router_state->router_table[index_of_parent_network].metric = 
+                                cap_metric(rec_metric + 1);
+                        }
+                    } else {
+                        // else
+                        // add the new network before the parent network in the router table
+                        add_to_table_at_pos(
                             router_state, index_of_parent_network,
                             rec_router_state->router_table[i].destination,
                             rec_router_state->router_table[i].netmask,
                             rec_router_state->interfaces[0].interface_ip,
                             router_state->interfaces[curr_interface].interface_ip,
                             cap_metric(rec_router_state->router_table[i].metric + 1)
-                    );
+                        );
+                    }
                 } else {
                     // this is the first time i encounter this network
                     // just add it to the table
@@ -908,22 +958,21 @@ void* gateway_life_clock(void *arg_router_state) {
 
     while (!router_state->should_restart && !router_state->should_terminate) {
       sleep(TIME_FOR_LIFE_DROP);
-      // TODO CHANGE LIFE TABLE MUTEX - can be omitted for now since this is
-      // the only place where the life_table is being read/written to
+      // TODO CHANGE LIFE TABLE MUTEX
+      pthread_mutex_lock(&router_state->change_router_table_mutex);
       for (uint32_t i = 0; i < router_state->life_entries; i++) {
           if (router_state->life_table[i].life_left == 0) {
-              pthread_mutex_lock(&router_state->change_router_table_mutex);
               set_metric_for_all_entries_with_destination(
                       router_state,
                       router_state->life_table[i].gateway,
                       INFINITY_METRIC
               );
-              pthread_mutex_unlock(&router_state->change_router_table_mutex);
           } else if (!match_ips(router_state->life_table[i].gateway,
                                 router_state->interfaces[0].interface_ip)) {
               router_state->life_table[i].life_left -= 1;
           }
       }
+      pthread_mutex_unlock(&router_state->change_router_table_mutex);
     }
 
     log_printf("gateway_life_clock ended\n");

@@ -11,7 +11,7 @@ const uint32_t BUFFER_SIZE = 2048;
 const uint32_t ROUTER_TABLE_MAX_SIZE = 100;
 const uint32_t INFINITY_METRIC = 16;
 const uint32_t MAX_GATEWAY_LIFE = 5;
-const uint32_t TIME_FOR_LIFE_DROP = 10;
+const uint32_t TIME_FOR_LIFE_DROP = 5;
 const uint32_t RAND_DELAY_BONUS = 3;
 const uint32_t MAX_NUM_INTERFACES = 10;
 
@@ -75,6 +75,22 @@ int find_index_of_network_that_subsumes(RouterState *router_state, uint8_t *ip_t
     }
 
     return -1;
+}
+
+int is_same_subnet(uint8_t *ip1, uint8_t *mask1, uint8_t *ip2, uint8_t *mask2) {
+    for (int i = 0; i < 4; i++) {
+        if (mask1[i] != mask2[i]) {
+            return 0;
+        }
+    }
+
+    for (int i = 0; i < 4; i++) {
+        if ((ip1[i] & mask1[i]) != (ip2[i] & mask2[i])) {
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 void get_broadcast_ip(uint8_t *host_ip, uint8_t *netmask, uint8_t *broadcast_ip) {
