@@ -11,6 +11,8 @@ extern const uint32_t RADIUS;
 extern const uint32_t ITERATIONS;
 extern const uint32_t GRAPHER_MAX_VERTICES;
 extern const uint32_t GRAPHER_MAX_EDGES;
+extern const uint32_t MAX_GRAPHER_VERTEX_LIFE;
+extern const uint32_t GRAPHER_TIME_FOR_LIFE_DROP;
 
 typedef struct {
     double x, y;
@@ -22,6 +24,7 @@ typedef struct {
     uint32_t router_id;
     InterfaceTableEntry *interfaces;
     uint32_t num_interfaces;
+    uint32_t life_left;
 } Vertex;
 
 typedef enum {
@@ -61,6 +64,7 @@ typedef struct {
     GtkWidget* drawing_area;
     Vertex* dragged_vertex;
     pthread_mutex_t change_graph_mutex;
+    pthread_mutex_t change_life_mutex;
 } GrapherState;
 
 #endif

@@ -14,6 +14,8 @@ const uint32_t RADIUS = 15;
 const uint32_t ITERATIONS = 500;
 const uint32_t GRAPHER_MAX_VERTICES = 200;
 const uint32_t GRAPHER_MAX_EDGES = 300;
+const uint32_t MAX_GRAPHER_VERTEX_LIFE = 5;
+const uint32_t GRAPHER_TIME_FOR_LIFE_DROP = 3;
 
 
 void free_vertex_interfaces(GrapherState *grapher_state) {
@@ -70,6 +72,17 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
     Vertex *copy_vertexes = malloc(size_vertexes);
     memcpy(copy_vertexes, grapher_state->vertices, size_vertexes);
 
+    for (uint32_t i = 0; i < copy_num_vertices; i++) {
+        // only the first interface_ip is displayed for every vertex.
+        // for every vertex we copy only the first interface.
+        copy_vertexes[i].interfaces = malloc(sizeof(InterfaceTableEntry));
+        memcpy(
+            copy_vertexes[i].interfaces,
+            grapher_state->vertices[i].interfaces,
+            sizeof(InterfaceTableEntry)
+        );
+    }
+
     pthread_mutex_unlock(&grapher_state->change_graph_mutex);
 
     for (int i = 0; i < copy_num_vertices; i++) {
@@ -91,6 +104,9 @@ gboolean draw_graph(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_show_text(cr, label);
     }
 
+    for (uint32_t i = 0; i < copy_num_vertices; i++) {
+        free(copy_vertexes[i].interfaces);
+    }
     free(copy_vertexes);
 
     return FALSE;
@@ -256,6 +272,7 @@ int add_vertex_to_graph(GrapherState *grapher_state, uint32_t router_id, uint8_t
     grapher_state->vertices[grapher_state->num_vertices].disp.x = 0;
     grapher_state->vertices[grapher_state->num_vertices].disp.y = 0;
     grapher_state->vertices[grapher_state->num_vertices].dragging = FALSE;
+    grapher_state->vertices[grapher_state->num_vertices].life_left = MAX_GRAPHER_VERTEX_LIFE;
     grapher_state->num_vertices += 1;
     return 0;
 }
@@ -318,11 +335,22 @@ int vertex_contains_interface(Vertex *v, uint8_t *arg_ip) {
     return 0;
 }
 
-int remove_edge_between_interfaces(GrapherState *grapher_state, uint8_t *ip_one, uint8_t *ip_two, EdgeType edge_type) {
-    if (grapher_state->num_edges == 0) {
-        return -1;
+int remove_edge_at_position(GrapherState *grapher_state, int pos) {
+    if (pos == grapher_state->num_edges - 1) {
+        memset(&grapher_state->edges[pos], 0, sizeof(Edge));
+    } else {
+        memcpy(&grapher_state->edges[pos],
+               &grapher_state->edges[grapher_state->num_edges - 1],
+               sizeof(Edge));
+        memset(&grapher_state->edges[grapher_state->num_edges - 1], 0,
+               sizeof(Edge));
     }
 
+    grapher_state->num_edges -= 1;
+    return 0;
+}
+
+int remove_edge_between_interfaces(GrapherState *grapher_state, uint8_t *ip_one, uint8_t *ip_two, EdgeType edge_type) {
     for (uint32_t i = 0; i < grapher_state->num_edges; i++) {
         Edge *curr_edge = &grapher_state->edges[i];
         if (
@@ -332,19 +360,54 @@ int remove_edge_between_interfaces(GrapherState *grapher_state, uint8_t *ip_one,
               (vertex_contains_interface(curr_edge->v, ip_two) && (vertex_contains_interface(curr_edge->u, ip_one)))
             )  
         ) {
-            if (i == grapher_state->num_edges - 1) {
-                memset(&grapher_state->edges[i], 0, sizeof(Edge));
-            }
-            else {
-                memcpy(
-                    &grapher_state->edges[i],
-                    &grapher_state->edges[grapher_state->num_edges - 1],
-                    sizeof(Edge)
-                );
-                memset(&grapher_state->edges[grapher_state->num_edges - 1], 0, sizeof(Edge));
+            return remove_edge_at_position(grapher_state, i);
+        }
+    }
+
+    return -1;
+}
+
+int delete_vertex_with_ip(GrapherState *grapher_state, uint8_t* arg_ip) {
+    uint8_t ip_to_delete[4];
+    memcpy(ip_to_delete, arg_ip, 4);
+
+    // delete all edges containing vertex
+    for (int i = grapher_state->num_edges - 1; i >= 0; i--) {
+        Edge *curr_edge = &grapher_state->edges[i];
+        if (
+            vertex_contains_interface(curr_edge->v, ip_to_delete) ||
+            vertex_contains_interface(curr_edge->u, ip_to_delete)
+        ) {
+            remove_edge_at_position(grapher_state, i);
+        }
+    }
+
+    // delete vertex containing interface
+    for (int i = grapher_state->num_vertices - 1; i >= 0; i--) {
+        Vertex *curr_vertex = &grapher_state->vertices[i];
+        if (vertex_contains_interface(curr_vertex, ip_to_delete)) {
+            free(curr_vertex->interfaces);
+
+            if (i == grapher_state->num_vertices - 1) {
+                memset(curr_vertex, 0, sizeof(Vertex));
+            } else {
+                Vertex *last_vertex = 
+                    &grapher_state->vertices[grapher_state->num_vertices - 1];
+                
+                memcpy(curr_vertex, last_vertex, sizeof(Vertex));
+                memset(last_vertex, 0, sizeof(Vertex));
+
+                for (int j = 0; j < grapher_state->num_edges; j++) {
+                    if (grapher_state->edges[j].v == last_vertex) {
+                        grapher_state->edges[j].v = curr_vertex;
+                    }
+                    if (grapher_state->edges[j].u == last_vertex) {
+                        grapher_state->edges[j].u = curr_vertex;
+                    }
+                }
             }
 
-            grapher_state->num_edges -= 1;
+            grapher_state->num_vertices -= 1;
             return 0;
         }
     }
@@ -490,6 +553,7 @@ void *grapher_listen(void *arg_grapher_state) {
         free(grapher_state->vertices);
         free(grapher_state->edges);
         pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+        pthread_mutex_destroy(&grapher_state->change_life_mutex);
         free(grapher_state);
         exit(EXIT_FAILURE);
     }
@@ -506,6 +570,7 @@ void *grapher_listen(void *arg_grapher_state) {
         free(grapher_state->vertices);
         free(grapher_state->edges);
         pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+        pthread_mutex_destroy(&grapher_state->change_life_mutex);
         free(grapher_state);
         exit(EXIT_FAILURE);
     }
@@ -526,6 +591,7 @@ void *grapher_listen(void *arg_grapher_state) {
         free(grapher_state->vertices);
         free(grapher_state->edges);
         pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+        pthread_mutex_destroy(&grapher_state->change_life_mutex);
         free(grapher_state);
         exit(EXIT_FAILURE);
     }
@@ -544,6 +610,7 @@ void *grapher_listen(void *arg_grapher_state) {
             free(grapher_state->vertices);
             free(grapher_state->edges);
             pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+            pthread_mutex_destroy(&grapher_state->change_life_mutex);
             free(grapher_state);
             exit(EXIT_FAILURE);
         }
@@ -588,13 +655,19 @@ void *grapher_listen(void *arg_grapher_state) {
                 free(grapher_state->vertices);
                 free(grapher_state->edges);
                 pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+                pthread_mutex_destroy(&grapher_state->change_life_mutex);
                 free(grapher_state);
                 exit(EXIT_FAILURE);
             }
 
             curr_router_index_in_graph = grapher_state->num_vertices - 1;
         } else {
-            // else, add the received interface to the vertex if it is not already present
+            // else, reset life clock for vertex
+            pthread_mutex_lock(&grapher_state->change_life_mutex);
+            grapher_state->vertices[curr_router_index_in_graph].life_left = MAX_GRAPHER_VERTEX_LIFE;
+            pthread_mutex_unlock(&grapher_state->change_life_mutex);
+
+            // also, add the received interface to the vertex if it is not already present
             add_interface_to_vertex_if_not_exists(
                 grapher_state,
                 curr_router_index_in_graph,
@@ -720,44 +793,70 @@ void *grapher_listen(void *arg_grapher_state) {
     return NULL;
 }
 
+void* vertex_life_clock(void *arg_grapher_state) {
+    GrapherState *grapher_state = (GrapherState *) arg_grapher_state;
+
+    while (1) {
+        sleep(GRAPHER_TIME_FOR_LIFE_DROP);
+
+        pthread_mutex_lock(&grapher_state->change_graph_mutex);
+        pthread_mutex_lock(&grapher_state->change_life_mutex);
+        for (int i = grapher_state->num_vertices - 1; i >= 0; i--) {
+            Vertex *curr_vertex = &grapher_state->vertices[i];
+            if (curr_vertex->life_left == 0) {
+                delete_vertex_with_ip(grapher_state, curr_vertex->interfaces[0].interface_ip);
+            } else {
+                curr_vertex->life_left -= 1;
+            }
+        }
+        pthread_mutex_unlock(&grapher_state->change_life_mutex);
+        pthread_mutex_unlock(&grapher_state->change_graph_mutex);
+    }
+}
+
 GrapherState *startup_grapher() {
     GrapherState *grapher_state = malloc(sizeof(GrapherState));
     grapher_state->vertices = malloc(GRAPHER_MAX_VERTICES * sizeof(Vertex));
     grapher_state->edges = malloc(GRAPHER_MAX_EDGES * sizeof(Edge));
     pthread_mutex_init(&grapher_state->change_graph_mutex, NULL);
+    pthread_mutex_init(&grapher_state->change_life_mutex, NULL);
 
     grapher_state->num_vertices = 0;
-    grapher_state->num_edges = 0;
     grapher_state->num_edges = 0;
     grapher_state->curr_iteration = 0;
     grapher_state->t = 5.0;
     grapher_state->drawing_area = gtk_drawing_area_new();
     grapher_state->dragged_vertex = NULL;
 
-    // TODO delete this
-    uint8_t test_ip_one[4] = { 0, 0, 0, 0 };
-    pthread_mutex_lock(&grapher_state->change_graph_mutex);
-    add_vertex_to_graph(grapher_state, 0, test_ip_one, test_ip_one);
-    pthread_mutex_unlock(&grapher_state->change_graph_mutex);
-
     return grapher_state;
 }
 
 int split_threads(GrapherState *grapher_state) {
-    int is_thread_error = 0;
-    pthread_t threads[1];
+    int num_threads = 2;
+    pthread_t threads[num_threads];
 
     int rc_one = pthread_create(&threads[0], NULL, grapher_listen, (void*) grapher_state);
     if (rc_one) {
-        free_vertex_interfaces(grapher_state);
-        free(grapher_state->vertices);
-        free(grapher_state->edges);
-        pthread_mutex_destroy(&grapher_state->change_graph_mutex);
-        free(grapher_state);
-        return -1;
+        goto cleanup_grapher_state;
+    }
+
+    int rc_two = pthread_create(&threads[1], NULL, vertex_life_clock, (void*) grapher_state);
+    if (rc_two) {
+        goto cleanup_grapher_state;
     }
 
     return 0;
+
+cleanup_grapher_state:
+    perror("Error initializing threads.");
+    free_vertex_interfaces(grapher_state);
+    free(grapher_state->vertices);
+    free(grapher_state->edges);
+    pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+    pthread_mutex_destroy(&grapher_state->change_life_mutex);
+    free(grapher_state);
+
+    return -1;
 }
 
 
@@ -805,6 +904,7 @@ int main(int argc, char *argv[]) {
     free(grapher_state->vertices);
     free(grapher_state->edges);
     pthread_mutex_destroy(&grapher_state->change_graph_mutex);
+    pthread_mutex_destroy(&grapher_state->change_life_mutex);
     free(grapher_state);
     return 0;
 }
