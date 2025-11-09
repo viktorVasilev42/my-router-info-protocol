@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <termios.h>
+#include <stdlib.h>
+#include <string.h>
 
 const uint32_t BROADCAST_PORT = 12345;
 const uint32_t LIVENESS_PORT = 12346;
@@ -128,4 +130,37 @@ uint32_t cap_metric(uint32_t metric_to_cap) {
     }
 
     return metric_to_cap;
+}
+
+void free_router_state(RouterState *router_state) {
+    free(router_state->router_table);
+    free(router_state->life_table);
+    free(router_state->interfaces);
+    pthread_mutex_destroy(&router_state->change_router_table_mutex);
+    free(router_state);
+}
+
+RipSocketBroadcastSetup setup_broadcast_sock() {
+    struct sockaddr_in broadcast_addr;
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        return (RipSocketBroadcastSetup) { 0, {0}, 1 };
+    }
+
+    int broadcast_enable = 1;
+    int setsockopt_res = setsockopt(
+            sock,
+            SOL_SOCKET, SO_BROADCAST,
+            &broadcast_enable, sizeof(broadcast_enable)
+    );
+    if (setsockopt_res < 0) {
+        return (RipSocketBroadcastSetup) { 0, {0}, 2 };
+    }
+
+    memset(&broadcast_addr, 0, sizeof(broadcast_addr));
+    broadcast_addr.sin_family = AF_INET;
+    broadcast_addr.sin_port = htons(BROADCAST_PORT);
+
+    return (RipSocketBroadcastSetup) { sock, broadcast_addr, 0 };
 }

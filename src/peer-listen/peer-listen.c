@@ -317,6 +317,25 @@ RouterState* startup_router(uint32_t router_id) {
     return router_state;
 }
 
+void handle_broadcast_sock_error(RouterState *router_state, RipSocketBroadcastSetup socket_setup) {
+    switch (socket_setup.errorCode) {
+        case 1:
+            perror("socket creation failed");
+            break;
+        case 2:
+            perror("setsockopt failed");
+            close(socket_setup.sock);
+            break;
+        case 0:
+            // no error
+            return;
+    }
+
+    // error has happened
+    free_router_state(router_state);
+    exit(EXIT_FAILURE);
+}
+
 // packet structure:
 // 1. 4 bytes -> ip of the interface that is broadcasting
 // 2. 4 bytes -> router_id - additional identifier needed for topology grapher
@@ -329,40 +348,8 @@ RouterState* startup_router(uint32_t router_id) {
 void* rip_broadcaster(void *arg_router_state) {
     RouterState *router_state = (RouterState*) arg_router_state;
 
-    int sock;
-    struct sockaddr_in broadcast_addr;
-
-    sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        perror("socket creation failed");
-        free(router_state->router_table);
-        free(router_state->life_table);
-        free(router_state->interfaces);
-        pthread_mutex_destroy(&router_state->change_router_table_mutex);
-        free(router_state);
-        exit(EXIT_FAILURE);
-    }
-
-    int broadcast_enable = 1;
-    int setsock_res = setsockopt(
-            sock,
-            SOL_SOCKET, SO_BROADCAST,
-            &broadcast_enable, sizeof(broadcast_enable)
-    );
-    if (setsock_res < 0) {
-        perror("setsockopt failed");
-        close(sock);
-        free(router_state->router_table);
-        free(router_state->life_table);
-        free(router_state->interfaces);
-        pthread_mutex_destroy(&router_state->change_router_table_mutex);
-        free(router_state);
-        exit(EXIT_FAILURE);
-    }
-
-    memset(&broadcast_addr, 0, sizeof(broadcast_addr));
-    broadcast_addr.sin_family = AF_INET;
-    broadcast_addr.sin_port = htons(BROADCAST_PORT);
+    RipSocketBroadcastSetup socket_setup = setup_broadcast_sock();
+    handle_broadcast_sock_error(router_state, socket_setup);
 
     while (!router_state->should_restart && !router_state->should_terminate) {
         pthread_mutex_lock(&router_state->change_router_table_mutex);
@@ -390,21 +377,17 @@ void* rip_broadcaster(void *arg_router_state) {
                 router_state->interfaces[i].interface_netmask,
                 broadcast_ip
             );
-            memcpy(&broadcast_addr.sin_addr.s_addr, broadcast_ip, 4);
+            memcpy(&socket_setup.broadcast_addr.sin_addr.s_addr, broadcast_ip, 4);
             memcpy(packet_to_send, router_state->interfaces[i].interface_ip, 4);
 
-            ssize_t sendto_res = sendto(sock, packet_to_send, SIZEOF_PACKET_TO_SEND, 0,
-                (struct sockaddr *)&broadcast_addr, sizeof(broadcast_addr));
+            ssize_t sendto_res = sendto(socket_setup.sock, packet_to_send, SIZEOF_PACKET_TO_SEND, 0,
+                (struct sockaddr *)&socket_setup.broadcast_addr, sizeof(socket_setup.broadcast_addr));
 
             if (sendto_res < 0) {
                 perror("sendto failed");
                 free(packet_to_send);
-                close(sock);
-                free(router_state->router_table);
-                free(router_state->life_table);
-                free(router_state->interfaces);
-                pthread_mutex_destroy(&router_state->change_router_table_mutex);
-                free(router_state);
+                close(socket_setup.sock);
+                free_router_state(router_state);
                 exit(EXIT_FAILURE);
             }
         }
@@ -416,7 +399,7 @@ void* rip_broadcaster(void *arg_router_state) {
         sleep(router_state->rand_delay);
     }
 
-    close(sock);
+    close(socket_setup.sock);
     log_printf("rip_broadcaster ended\n");
     return NULL;
 }
@@ -436,12 +419,7 @@ void* rip_listen(void *arg_rip_listen_state) {
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket creation failed");
-        free(router_state->router_table);
-        free(router_state->life_table);
-        free(router_state->interfaces);
-        pthread_mutex_destroy(&router_state->change_router_table_mutex);
-        free(router_state);
-        free(rip_listen_state);
+        free_router_state(router_state);
         exit(EXIT_FAILURE);
     }
 
@@ -453,12 +431,7 @@ void* rip_listen(void *arg_rip_listen_state) {
     if (setsock_res < 0) {
         perror("setsockopt with SO_REUSEADDR failed");
         close(sock);
-        free(router_state->router_table);
-        free(router_state->life_table);
-        free(router_state->interfaces);
-        pthread_mutex_destroy(&router_state->change_router_table_mutex);
-        free(router_state);
-        free(rip_listen_state);
+        free_router_state(router_state);
         exit(EXIT_FAILURE);
     }
 
@@ -485,12 +458,7 @@ void* rip_listen(void *arg_rip_listen_state) {
     if (bind_res < 0) {
         perror("bind failed");
         close(sock);
-        free(router_state->router_table);
-        free(router_state->life_table);
-        free(router_state->interfaces);
-        pthread_mutex_destroy(&router_state->change_router_table_mutex);
-        free(router_state);
-        free(rip_listen_state);
+        free_router_state(router_state);
         exit(EXIT_FAILURE);
     }
 
@@ -511,12 +479,7 @@ void* rip_listen(void *arg_rip_listen_state) {
         if (bytes_received < 0) {
             perror("recvform failed");
             close(sock);
-            free(router_state->router_table);
-            free(router_state->life_table);
-            free(router_state->interfaces);
-            pthread_mutex_destroy(&router_state->change_router_table_mutex);
-            free(router_state);
-            free(rip_listen_state);
+            free_router_state(router_state);
             exit(EXIT_FAILURE);
         }
 

@@ -5,42 +5,37 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <time.h>
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
 const uint32_t HOST_RAND_DELAY_BONUS = 3;
 
+
+void handle_host_broadcast_sock_error(HostState *host_state, RipSocketBroadcastSetup socket_setup) {
+    switch (socket_setup.errorCode) {
+        case 1:
+            perror("socket creation failed");
+            break;
+        case 2:
+            perror("setsockopt failed");
+            close(socket_setup.sock);
+            break;
+        case 0:
+            // no error
+            return;
+    }
+
+    // error has happened
+    free(host_state);
+    exit(EXIT_FAILURE);
+}
+
 void* host_broadcaster(void *arg_host_state) {
     HostState *host_state = (HostState*) arg_host_state;
 
-    int sock;
-    struct sockaddr_in broadcast_addr;
-
-    sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        perror("socket creation failed");
-        free(host_state);
-        exit(EXIT_FAILURE);
-    }
-
-    int broadcast_enable = 1;
-    int setsockopt_res = setsockopt(
-            sock,
-            SOL_SOCKET, SO_BROADCAST,
-            &broadcast_enable, sizeof(broadcast_enable)
-    );
-    if (setsockopt_res < 0) {
-        perror("setsockopt failed");
-        close(sock);
-        free(host_state);
-        exit(EXIT_FAILURE);
-    }
-
-    memset(&broadcast_addr, 0, sizeof(broadcast_addr));
-    broadcast_addr.sin_family = AF_INET;
-    broadcast_addr.sin_port = htons(BROADCAST_PORT);
+    RipSocketBroadcastSetup socket_setup = setup_broadcast_sock();
+    handle_host_broadcast_sock_error(host_state, socket_setup);
 
     uint8_t broadcast_ip[4];
     get_broadcast_ip(
@@ -48,7 +43,7 @@ void* host_broadcaster(void *arg_host_state) {
         host_state->interface_netmask,
         broadcast_ip
     );
-    memcpy(&broadcast_addr.sin_addr.s_addr, broadcast_ip, 4);
+    memcpy(&socket_setup.broadcast_addr.sin_addr.s_addr, broadcast_ip, 4);
 
     while (1) {
         // one table entry [ip, netmask, ip, 0]
@@ -85,12 +80,12 @@ void* host_broadcaster(void *arg_host_state) {
         memcpy(packet_to_send + 12, &table_entry_to_send, sizeof(RouterTableEntry));
 
         ssize_t sendto_res =
-            sendto(sock, packet_to_send, SIZEOF_PACKET_TO_SEND, 0,
-                    (struct sockaddr*)&broadcast_addr, sizeof(broadcast_addr));
+            sendto(socket_setup.sock, packet_to_send, SIZEOF_PACKET_TO_SEND, 0,
+                    (struct sockaddr*)&socket_setup.broadcast_addr, sizeof(socket_setup.broadcast_addr));
         if (sendto_res < 0) {
             perror("sendto failed");
             free(packet_to_send);
-            close(sock);
+            close(socket_setup.sock);
             free(host_state);
             exit(EXIT_FAILURE);
         }
@@ -108,7 +103,7 @@ void* host_broadcaster(void *arg_host_state) {
         sleep(host_state->rand_delay);
     }
 
-    close(sock);
+    close(socket_setup.sock);
     return NULL;
 }
 

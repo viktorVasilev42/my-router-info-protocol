@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <arpa/inet.h>
 
 typedef struct {
     uint8_t interface_ip[4];
@@ -53,6 +54,12 @@ typedef struct {
     uint32_t curr_interface;
 } RipListenState;
 
+typedef struct {
+    int sock;
+    struct sockaddr_in broadcast_addr;
+    int errorCode;
+} RipSocketBroadcastSetup;
+
 extern const uint32_t BROADCAST_PORT;
 extern const uint32_t LIVENESS_PORT;
 extern const uint32_t BUFFER_SIZE;
@@ -69,7 +76,6 @@ extern int enable_logging;
 int match_ips(uint8_t *first_ip, uint8_t *second_ip);
 
 int is_valid_ip(const char *ip);
-
 
 int is_network_subsumed(uint8_t *ip1, uint8_t *mask1, uint8_t *ip2, uint8_t *mask2);
 
@@ -88,5 +94,9 @@ void enable_raw_term();
 void disable_raw_term();
 
 uint32_t cap_metric(uint32_t metric_to_cap);
+
+void free_router_state(RouterState *router_state);
+
+RipSocketBroadcastSetup setup_broadcast_sock();
 
 #endif
