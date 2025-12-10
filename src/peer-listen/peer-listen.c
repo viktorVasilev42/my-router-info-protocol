@@ -73,7 +73,7 @@ int add_to_table(RouterState *router_state,
     memcpy(router_state->router_table[router_state->num_entries].netmask, netmask, 4);
     memcpy(router_state->router_table[router_state->num_entries].gateway, gateway, 4);
     memcpy(router_state->router_table[router_state->num_entries].interface, if_to_hop, 4);
-    router_state->router_table[router_state->num_entries].metric = metric;
+    router_state->router_table[router_state->num_entries].metric = cap_metric(metric);
     router_state->num_entries += 1;
     return 0;
 }
@@ -106,7 +106,7 @@ int add_to_table_at_pos(RouterState *router_state, int pos,
     memcpy(router_state->router_table[pos].netmask, netmask, 4);
     memcpy(router_state->router_table[pos].gateway, gateway, 4);
     memcpy(router_state->router_table[pos].interface, if_to_hop, 4);
-    router_state->router_table[pos].metric = metric;
+    router_state->router_table[pos].metric = cap_metric(metric);
     router_state->num_entries += 1;
     return 0;
 }
@@ -342,9 +342,6 @@ void handle_broadcast_sock_error(RouterState *router_state, RipSocketBroadcastSe
 // 3. 4 bytes -> num_entries (uint32_t)
 // 4. [router_state->num_entires] times RouterTableEntry for every row
 //      in the router table
-// 5. RouterTableEntry for the interface of the router as a destination
-//      in the router table
-//
 void* rip_broadcaster(void *arg_router_state) {
     RouterState *router_state = (RouterState*) arg_router_state;
 
@@ -636,6 +633,8 @@ void* rip_listen(void *arg_rip_listen_state) {
                             );
                             router_state->router_table[index_of_parent_network].metric = 
                                 cap_metric(rec_metric + 1);
+                        } else {
+                            should_do_life_table_update = 0;
                         }
                     } else {
                         // else
@@ -646,7 +645,7 @@ void* rip_listen(void *arg_rip_listen_state) {
                             rec_router_state->router_table[i].netmask,
                             rec_router_state->interfaces[0].interface_ip,
                             router_state->interfaces[curr_interface].interface_ip,
-                            cap_metric(rec_router_state->router_table[i].metric + 1)
+                            rec_router_state->router_table[i].metric + 1
                         );
                     }
                 } else {
@@ -658,7 +657,7 @@ void* rip_listen(void *arg_rip_listen_state) {
                             rec_router_state->router_table[i].netmask,
                             rec_router_state->interfaces[0].interface_ip,
                             router_state->interfaces[curr_interface].interface_ip,
-                            cap_metric(rec_router_state->router_table[i].metric + 1)
+                            rec_router_state->router_table[i].metric + 1
                     );
                 }
             }
@@ -837,8 +836,7 @@ void* gateway_life_clock(void *arg_router_state) {
                       router_state->life_table[i].gateway,
                       INFINITY_METRIC
               );
-          } else if (!match_ips(router_state->life_table[i].gateway,
-                                router_state->interfaces[0].interface_ip)) {
+          } else {
               router_state->life_table[i].life_left -= 1;
           }
       }
