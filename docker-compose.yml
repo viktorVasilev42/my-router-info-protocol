@@ -8,10 +8,10 @@ services:
     stdin_open: true
     tty: true
     networks:
-      custom-net-6:
-        ipv4_address: 192.168.60.20
       custom-net-1:
-        ipv4_address: 192.168.10.10
+        ipv4_address: 192.168.100.10
+      custom-net-3:
+        ipv4_address: 192.168.150.10
 
   router2:
     build: .
@@ -22,66 +22,46 @@ services:
     stdin_open: true
     tty: true
     networks:
+      custom-net-2:
+        ipv4_address: 192.168.200.10
+      custom-net-3:
+        ipv4_address: 192.168.150.20
+
+  host1:
+    build: .
+    container_name: rip-host1
+    environment:
+      - HOST_ID=1
+    command: ["./peer-listen", "host", "101"]
+    stdin_open: true
+    tty: true
+    networks:
       custom-net-1:
-        ipv4_address: 192.168.10.20
-      custom-net-2:
-        ipv4_address: 192.168.20.10
+        ipv4_address: 192.168.100.11
 
-  router3:
+  host2:
     build: .
-    container_name: my-rip-router3
+    container_name: rip-host2
     environment:
-      - ROUTER_ID=3
-    command: ["./peer-listen", "router", "3"]
+      - HOST_ID=2
+    command: ["./peer-listen", "host", "102"]
     stdin_open: true
     tty: true
     networks:
       custom-net-2:
-        ipv4_address: 192.168.20.20
-      custom-net-3:
-        ipv4_address: 192.168.30.10
+        ipv4_address: 192.168.200.11
 
-  router4:
+  host3:
     build: .
-    container_name: my-rip-router4
+    container_name: rip-host3
     environment:
-      - ROUTER_ID=4
-    command: ["./peer-listen", "router", "4"]
+      - HOST_ID=3
+    command: ["./peer-listen", "host", "103"]
     stdin_open: true
     tty: true
     networks:
-      custom-net-3:
-        ipv4_address: 192.168.30.20
-      custom-net-4:
-        ipv4_address: 192.168.40.10
-
-  router5:
-    build: .
-    container_name: my-rip-router5
-    environment:
-      - ROUTER_ID=5
-    command: ["./peer-listen", "router", "5"]
-    stdin_open: true
-    tty: true
-    networks:
-      custom-net-4:
-        ipv4_address: 192.168.40.20
-      custom-net-5:
-        ipv4_address: 192.168.50.10
-
-  router6:
-    build: .
-    container_name: my-rip-router6
-    environment:
-      - ROUTER_ID=6
-    command: ["./peer-listen", "router", "6"]
-    stdin_open: true
-    tty: true
-    networks:
-      custom-net-5:
-        ipv4_address: 192.168.50.20
-      custom-net-6:
-        ipv4_address: 192.168.60.10
+      custom-net-2:
+        ipv4_address: 192.168.200.12
 
   topology-grapher:
     build: .
@@ -103,35 +83,17 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: "192.168.10.0/24"
+        - subnet: "192.168.100.0/24"
 
   custom-net-2:
     driver: bridge
     ipam:
       config:
-        - subnet: "192.168.20.0/24"
+        - subnet: "192.168.200.0/24"
 
   custom-net-3:
     driver: bridge
     ipam:
       config:
-        - subnet: "192.168.30.0/24"
-
-  custom-net-4:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: "192.168.40.0/24"
-
-  custom-net-5:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: "192.168.50.0/24"
-
-  custom-net-6:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: "192.168.60.0/24"
+        - subnet: "192.168.150.0/24"
       
